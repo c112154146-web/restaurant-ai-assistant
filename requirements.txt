@@ -5,3 +5,4 @@ oauth2client
 google-generativeai
 google-generativeai
 Pillow
+openai
