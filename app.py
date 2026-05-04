@@ -172,7 +172,11 @@ st.markdown("歡迎使用 AI 庫存管理系統")
 tab1, tab2, tab3 = st.tabs(["📊 庫存預測", "📸 單據辨識", "🎙️ 語音助理"])
 
 with tab1:
-    st.header("庫存戰情室與 AI 採購建議")
+    st.header("📊 庫存戰情室與採購建議")
+    
+    # 這裡可以設定您的安全警戒線（完美繼承您的設計）
+    SAFE_STOCK_LEVEL = 5 
+    
     if st.button("啟動 AI 運算 🚀", use_container_width=True):
         with st.spinner('正在拉取資料並運算中...'):
             try:
@@ -186,6 +190,9 @@ with tab1:
                 df_in['日期'] = pd.to_datetime(df_in['日期'])
                 today = datetime.now()
                 report_data = []
+                
+                # 🚨 新增：用來收集需要發出紅色警告的品項
+                alert_items = [] 
 
                 for index, row in df_stock.iterrows():
                     product = str(row.get('商品名稱', ''))
@@ -193,24 +200,60 @@ with tab1:
                     if not product: continue
 
                     product_in = df_in[df_in['商品名稱'] == product]
-                    if product_in.empty: continue
-
-                    days_tracked = max(1, (today - product_in['日期'].min()).days)
-                    total_consumed = max(0, product_in['數量'].sum() - current_stock)
-                    daily_burn_rate = total_consumed / days_tracked
-                    days_remaining = current_stock / daily_burn_rate if daily_burn_rate > 0 else 999
+                    
+                    # 預設狀態
+                    days_remaining = 999
+                    daily_burn_rate = 0.0
+                    
+                    if not product_in.empty:
+                        days_tracked = max(1, (today - product_in['日期'].min()).days)
+                        total_consumed = max(0, product_in['數量'].sum() - current_stock)
+                        daily_burn_rate = total_consumed / days_tracked
+                        if daily_burn_rate > 0:
+                            days_remaining = current_stock / daily_burn_rate
 
                     suggestion = "✅ 安全"
-                    if days_remaining <= 3: suggestion = "🚨 立即叫貨"
-                    elif days_remaining <= 7: suggestion = "⚠️ 即將見底"
+                    alert_reason = ""
+                    needs_alert = False
 
-                    report_data.append({"品項": product, "日耗/天": f"{daily_burn_rate:.1f}", "剩餘天數": f"{int(days_remaining)}天" if days_remaining != 999 else "極少", "建議": suggestion})
+                    # 雙重警告機制：數量太少 OR 天數太少 都會觸發
+                    if current_stock <= SAFE_STOCK_LEVEL:
+                        needs_alert = True
+                        alert_reason = f"剩餘數量極低 (僅剩 {int(current_stock)})"
+                    elif days_remaining <= 3:
+                        needs_alert = True
+                        alert_reason = f"預測撐不過 3 天 (約剩 {int(days_remaining)} 天)"
+                        
+                    if needs_alert:
+                        suggestion = "🚨 立即叫貨"
+                        alert_items.append(f"**{product}**：{alert_reason}")
+                    elif days_remaining <= 7: 
+                        suggestion = "⚠️ 即將見底"
 
+                    report_data.append({
+                        "品項": product, 
+                        "庫存": int(current_stock), 
+                        "日耗/天": f"{daily_burn_rate:.1f}", 
+                        "剩餘天數": f"{int(days_remaining)}天" if days_remaining != 999 else "-", 
+                        "建議": suggestion
+                    })
+
+                # 🌟 亮點：在畫面最上方顯示大大的警告框！
+                if alert_items:
+                    st.error("🚨 **【異常狀況警報：庫存過低】** 請盡速安排補貨！")
+                    for item in alert_items:
+                        st.warning(f"👉 {item}")
+                else:
+                    st.success("✅ 目前所有食材庫存量皆充足！無急需採購項目。")
+
+                # 最後才顯示完整的分析表格
                 if report_data:
-                    st.success("✅ 運算完成！")
                     st.dataframe(pd.DataFrame(report_data), use_container_width=True)
-                else: st.info("目前沒有足夠數據可分析。")
-            except Exception as e: st.error(f"運算錯誤：{e}")
+                else: 
+                    st.info("目前沒有足夠數據可分析。")
+                    
+            except Exception as e: 
+                st.error(f"運算錯誤：{e}")
 
 with tab2:
     st.header("📸 單據自動建檔")
