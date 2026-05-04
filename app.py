@@ -239,10 +239,41 @@ with tab1:
                     })
 
                 # 🌟 亮點：在畫面最上方顯示大大的警告框！
+               # 🌟 亮點：在畫面最上方顯示大大的警告框！
                 if alert_items:
                     st.error("🚨 **【異常狀況警報：庫存過低】** 請盡速安排補貨！")
                     for item in alert_items:
                         st.warning(f"👉 {item}")
+                        
+                    # ==========================================
+                    # 🚀 新增功能：一鍵產生 LINE 採購單
+                    # ==========================================
+                    import urllib.parse
+                    
+                    # 1. 組合超專業的 LINE 訊息內容
+                    msg_lines = [
+                        "【📦 鼎極餐廳 - AI 緊急採購單】", 
+                        f"📅 日期：{today.strftime('%Y/%m/%d')}",
+                        "------------------------"
+                    ]
+                    
+                    for item in alert_items:
+                        # 把粗體符號 ** 拿掉，讓 LINE 顯示更乾淨
+                        clean_item = item.replace("**", "")
+                        msg_lines.append(f"🛒 {clean_item}")
+                        
+                    msg_lines.append("------------------------")
+                    msg_lines.append("🤖 此訊息由 AI 倉儲系統自動生成，請協助盡速補貨！")
+                    
+                    # 2. 將文字轉換成 LINE 看得懂的網址格式
+                    final_msg = "\n".join(msg_lines)
+                    line_url = f"https://line.me/R/msg/text/?{urllib.parse.quote(final_msg)}"
+                    
+                    # 3. 顯示超搶眼的按鈕
+                    st.write("") # 空一行比較好看
+                    st.link_button("📲 一鍵傳送採購單至 LINE", line_url, type="primary", use_container_width=True)
+                    # ==========================================
+
                 else:
                     st.success("✅ 目前所有食材庫存量皆充足！無急需採購項目。")
 
