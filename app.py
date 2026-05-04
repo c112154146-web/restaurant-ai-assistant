@@ -214,7 +214,11 @@ with tab1:
 
 with tab2:
     st.header("📸 單據自動建檔")
-    camera_photo = st.camera_input("拍攝進貨單")
+    st.write("請拍攝或上傳進貨單，系統將自動萃取品項與數量。")
+    
+    # ✅ 改用 file_uploader，在手機上會自動喚醒原生高畫質相機！
+    camera_photo = st.file_uploader("點擊這裡拍照或上傳單據", type=['jpg', 'jpeg', 'png', 'webp'])
+    
     if camera_photo:
         st.image(camera_photo, caption="準備辨識的單據", use_container_width=True)
         if st.button("🧠 開始 AI 辨識並入庫", use_container_width=True):
