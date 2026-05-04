@@ -6,3 +6,4 @@ google-generativeai
 google-generativeai
 Pillow
 openai
+rapidfuzz
