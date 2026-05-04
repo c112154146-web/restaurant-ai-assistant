@@ -1,43 +1,139 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import json
+import re
+import google.generativeai as genai # 🌟 新增 Gemini 套件
+from PIL import Image # 🌟 新增影像處理套件
 
-# 1. 設定網頁標題與手機版面配置
+# ================= 1. 版面與基本設定 =================
 st.set_page_config(page_title="餐廳倉儲助手", page_icon="📦", layout="centered")
 
-st.title("📦 餐廳倉儲助手")
-st.markdown("歡迎使用多模態 AI 倉儲管理系統")
+# ================= 2. 安全連線與 API 設定 =================
+# 讀取 Gemini 金鑰
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
-# 2. 建立手機 App 的三個直覺化分頁
-tab1, tab2, tab3 = st.tabs(["📊 預測報表", "📸 拍照進貨", "🎙️ 語音操作"])
+def connect_spreadsheet():
+    creds_dict = json.loads(st.secrets["gcp_service_account"]["credentials"])
+    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client_gs = gspread.authorize(creds)
+    return client_gs.open('智慧庫存系統') 
 
-# --- 分頁 1：戰情儀表板 ---
+# ================= 3. 資料清洗輔助函式 =================
+def extract_number(val):
+    if pd.isna(val) or str(val).strip() == '':
+        return 0.0
+    match = re.search(r'[\d\.]+', str(val))
+    return float(match.group()) if match else 0.0
+
+# ================= 4. 建立 App 介面 =================
+st.title("📦 鼎極餐廳倉儲助手")
+st.markdown("歡迎使用 AI 庫存管理系統")
+
+tab1, tab2, tab3 = st.tabs(["📊 庫存預測", "📸 單據辨識", "🎙️ 語音助理"])
+
+# --- 分頁 1：預測報表 (維持不變) ---
 with tab1:
-    st.header("📊 庫存戰情室與採購建議")
-    st.info("這裡稍後會接上您的 Pandas AI 預測演算法，直接在手機顯示精美報表！")
-    
-    # 放個假按鈕預留位置
-    if st.button("🔄 立即重新運算耗損率"):
-        st.success("雲端運算中...")
+    st.header("庫存戰情室與 AI 採購建議")
+    if st.button("啟動 AI 運算 🚀", use_container_width=True):
+        with st.spinner('正在從 Google Sheets 拉取資料並運算中...'):
+            try:
+                doc = connect_spreadsheet()
+                df_stock = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
+                df_in = pd.DataFrame(doc.worksheet('進貨紀錄').get_all_records())
 
-# --- 分頁 2：視覺多模態進貨 ---
+                df_stock['庫存數量'] = df_stock['庫存數量'].apply(extract_number)
+                if '數量' in df_in.columns:
+                    df_in['數量'] = df_in['數量'].apply(extract_number)
+
+                df_in['日期'] = pd.to_datetime(df_in['日期'])
+                today = datetime.now()
+                report_data = []
+
+                for index, row in df_stock.iterrows():
+                    product = str(row.get('商品名稱', ''))
+                    current_stock = row.get('庫存數量', 0.0)
+                    if not product: continue
+
+                    product_in = df_in[df_in['商品名稱'] == product]
+                    if product_in.empty: continue
+
+                    days_tracked = max(1, (today - product_in['日期'].min()).days)
+                    total_consumed = max(0, product_in['數量'].sum() - current_stock)
+                    daily_burn_rate = total_consumed / days_tracked
+                    days_remaining = current_stock / daily_burn_rate if daily_burn_rate > 0 else 999
+
+                    suggestion = "✅ 安全"
+                    if days_remaining <= 3: suggestion = "🚨 立即叫貨"
+                    elif days_remaining <= 7: suggestion = "⚠️ 即將見底"
+
+                    report_data.append({
+                        "品項": product,
+                        "日耗/天": f"{daily_burn_rate:.1f}",
+                        "剩餘天數": f"{int(days_remaining)}天" if days_remaining != 999 else "極少",
+                        "建議": suggestion
+                    })
+
+                if report_data:
+                    st.success("✅ 運算完成！")
+                    st.dataframe(pd.DataFrame(report_data), use_container_width=True)
+                else:
+                    st.info("目前沒有足夠數據可分析。")
+            except Exception as e:
+                st.error(f"連線或運算發生錯誤：{e}")
+
+# --- 分頁 2：影像辨識 (🌟 全新裝上 Gemini 大腦) ---
 with tab2:
-    st.header("📸 影像 OCR 自動建檔")
-    st.write("請對準進貨單或食材拍照，系統將自動萃取品項與數量。")
+    st.header("📸 單據自動建檔")
+    st.write("請對準進貨單拍照，系統將自動萃取品項與數量寫入雲端。")
     
-    # 🌟 神奇的 Streamlit 相機元件：在手機上按下去會直接打開相機！
-    camera_photo = st.camera_input("開啟相機拍攝")
+    camera_photo = st.camera_input("拍攝進貨單")
     
     if camera_photo:
-        st.success("📸 照片已拍攝！準備傳送給 Gemini 2.5 Flash 大腦...")
         st.image(camera_photo, caption="準備辨識的單據", use_container_width=True)
+        
+        if st.button("🧠 開始 AI 辨識並入庫", use_container_width=True):
+            with st.spinner("Gemini 視覺大腦分析中..."):
+                try:
+                    # 1. 讀取照片
+                    img = Image.open(camera_photo)
+                    
+                    # 2. 呼叫 Gemini 2.5 Flash
+                    model = genai.GenerativeModel('gemini-2.5-flash')
+                    prompt = """
+                    這是一張餐廳的單據或盤點表。請幫我萃取裡面的品項與數量。
+                    嚴格輸出 JSON 陣列格式，只能包含 'product' 和 'quantity' 兩個 key，不要輸出其他任何文字。
+                    """
+                    response = model.generate_content([img, prompt])
+                    
+                    # 3. 解析 JSON
+                    result_text = response.text.replace("```json", "").replace("```", "").strip()
+                    items = json.loads(result_text)
+                    
+                    # 4. 寫入 Google Sheets (進貨紀錄表)
+                    doc = connect_spreadsheet()
+                    in_log_sheet = doc.worksheet('進貨紀錄')
+                    today_str = datetime.now().strftime("%Y/%m/%d")
+                    
+                    for item in items:
+                        product_name = item['product']
+                        qty = item['quantity']
+                        # 依序寫入：日期, 來源(填寫AI辨識), 商品名稱, 數量
+                        in_log_sheet.append_row([today_str, "AI 視覺單據", product_name, qty])
+                        st.success(f"✅ 已成功建檔：{product_name} (數量: {qty})")
+                        
+                    st.balloons() # 飄氣球慶祝
+                    
+                except Exception as e:
+                    st.error(f"❌ 辨識或寫入失敗：{e}")
 
-# --- 分頁 3：語音進貨與報廢 ---
+# --- 分頁 3：語音辨識 (保留外觀，下一步處理) ---
 with tab3:
-    st.header("🎙️ 語音助理更新庫存")
-    st.write("請點擊下方麥克風，直接說出例如：「高麗菜進貨五個」。")
-    
-    # 🌟 神奇的 Streamlit 錄音元件 (需較新版本支援)
+    st.header("🎙️ 語音操作")
+    st.info("即將串接 Whisper 語音模型...")
     audio_file = st.audio_input("點擊錄音")
-    
     if audio_file:
-        st.success("🎤 錄音完成！準備傳送給 Whisper 模型解析...")
+        st.success("錄音已擷取！準備開發中...")
