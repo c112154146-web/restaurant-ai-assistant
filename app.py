@@ -214,7 +214,7 @@ with tab1:
 
 with tab2:
     st.header("📸 單據自動建檔")
-    st.write("請拍攝或上傳進貨單，系統將自動萃取品項與數量。")
+    st.write("請拍攝或上傳進貨單，系統將自動讀取品項與數量。")
     
     # ✅ 改用 file_uploader，在手機上會自動喚醒原生高畫質相機！
     camera_photo = st.file_uploader("點擊這裡拍照或上傳單據", type=['jpg', 'jpeg', 'png', 'webp'])
@@ -238,7 +238,7 @@ with tab2:
 
 with tab3:
     st.header("🎙️ 語音操作")
-    st.write("請說出指令，例如：「從好市多進貨高麗菜五個」。")
+    st.write("請說出指令，例如：「進貨高麗菜五個」。")
     audio_file = st.audio_input("點擊錄音")
     
     if audio_file:
