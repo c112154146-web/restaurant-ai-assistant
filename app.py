@@ -169,7 +169,7 @@ def smart_parse_and_execute(text):
 st.title("📦倉儲助手")
 st.markdown("歡迎使用 AI 庫存管理系統")
 
-tab1, tab2, tab3 = st.tabs(["📊 庫存預測", "📸 單據辨識", "🎙️ 語音助理"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 庫存預測", "📸 單據辨識", "🎙️ 語音助理", "🕒 操作紀錄"])
 
 with tab1:
     st.header("📊 庫存戰情室與採購建議")
@@ -365,6 +365,53 @@ with tab3:
                     smart_parse_and_execute(spoken_text)
                     
                 except Exception as e: st.error(f"❌ 語音辨識失敗：{e}")
+# --- 分頁 4：操作紀錄動態牆 ---
+with tab4:
+    st.header("🕒 最新進出庫動態牆")
+    st.markdown("這裡會顯示系統最新的 10 筆操作紀錄，讓您隨時檢查 AI 的寫入動作。")
+    
+    if st.button("🔄 點我重新整理紀錄", use_container_width=True):
+        st.rerun() # 重新讀取最新資料
+        
+    try:
+        doc = connect_spreadsheet()
+        # 抓取進貨紀錄
+        df_in = pd.DataFrame(doc.worksheet('進貨紀錄').get_all_records())
+        if not df_in.empty:
+            df_in['動作'] = '📦 進貨'
+        
+        # 抓取報廢紀錄
+        try:
+            df_waste = pd.DataFrame(doc.worksheet('報廢紀錄').get_all_records())
+            if not df_waste.empty:
+                df_waste['動作'] = '🗑️ 報廢'
+                df_all = pd.concat([df_in, df_waste], ignore_index=True)
+            else:
+                df_all = df_in
+        except:
+            df_all = df_in # 若沒建報廢表則略過
+            
+        if not df_all.empty:
+            # 將日期轉換為時間格式並「由新到舊」排序
+            if '日期' in df_all.columns:
+                df_all['日期'] = pd.to_datetime(df_all['日期'], errors='coerce')
+                df_all = df_all.sort_values(by='日期', ascending=False)
+                df_all['日期'] = df_all['日期'].dt.strftime('%Y-%m-%d %H:%M:%S')
+            
+            # 只顯示最新 10 筆
+            df_display = df_all.head(10)
+            
+            # 重新排列欄位，讓「動作」顯示在前面比較直覺
+            cols = ['日期', '動作'] + [c for c in df_display.columns if c not in ['日期', '動作']]
+            st.dataframe(df_display[cols], use_container_width=True)
+        else:
+            st.info("目前尚無任何進出庫紀錄。")
+            
+    except Exception as e:
+        st.error(f"讀取紀錄失敗：{e}")
+
+# ================= 4. 開發者工具 =================
+# (下面接著您原本的 with st.sidebar: ...)
 
 # ================= 4. 開發者工具 =================
 with st.sidebar:
