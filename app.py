@@ -166,7 +166,7 @@ def smart_parse_and_execute(text):
     update_sheet_stock(target_product, qty, action, expiry=None, detail_info=detail_info)
 
 # ================= 3. 建立 App 介面 =================
-st.title("📦 鼎極餐廳倉儲助手")
+st.title("📦餐廳倉儲助手")
 st.markdown("歡迎使用 AI 庫存管理系統")
 
 tab1, tab2, tab3 = st.tabs(["📊 庫存預測", "📸 單據辨識", "🎙️ 語音助理"])
