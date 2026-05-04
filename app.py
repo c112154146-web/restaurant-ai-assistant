@@ -137,3 +137,25 @@ with tab3:
     audio_file = st.audio_input("點擊錄音")
     if audio_file:
         st.success("錄音已擷取！準備開發中...")
+# ================= 5. 開發者工具：一鍵重置 (側邊欄) =================
+with st.sidebar:
+    st.header("⚙️ 開發者測試區")
+    st.warning("🚨 警告：這將會清空所有商品與進貨資料！")
+    
+    # 加上防呆機制：必須打勾，按鈕才能按
+    confirm_reset = st.checkbox("我確定要清空測試資料")
+    
+    # disabled=not confirm_reset 代表：如果沒打勾，按鈕就會反灰不能按
+    if st.button("🗑️ 一鍵重置試算表", disabled=not confirm_reset, use_container_width=True):
+        with st.spinner("正在清空資料，保留標題列..."):
+            try:
+                doc = connect_spreadsheet()
+                
+                # 使用 batch_clear 範圍清空：
+                # 只清空 A2 到 Z10000 的範圍，這樣就能完美保留第 1 列的「標題」與格式！
+                doc.worksheet('工作表1').batch_clear(['A2:Z10000'])
+                doc.worksheet('進貨紀錄').batch_clear(['A2:Z10000'])
+                
+                st.success("✨ 重置成功！試算表已恢復乾淨狀態，可以開始全新的測試了。")
+            except Exception as e:
+                st.error(f"❌ 重置失敗：{e}")
