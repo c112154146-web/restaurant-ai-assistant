@@ -278,8 +278,24 @@ with tab1:
                     st.success("✅ 目前所有食材庫存量皆充足！無急需採購項目。")
 
                 # 最後才顯示完整的分析表格
+                # 最後才顯示完整的分析表格
                 if report_data:
-                    st.dataframe(pd.DataFrame(report_data), use_container_width=True)
+                    df_report = pd.DataFrame(report_data)
+                    st.dataframe(df_report, use_container_width=True)
+                    
+                    # ==========================================
+                    # 🚀 新增功能：視覺化庫存圖表
+                    # ==========================================
+                    st.divider() # 畫一條漂亮的分隔線
+                    st.subheader("📈 庫存水位分佈圖")
+                    
+                    # 把「品項」設定為圖表的 X 軸標籤，並抓出「庫存」欄位畫圖
+                    chart_data = df_report.set_index("品項")[["庫存"]]
+                    
+                    # Streamlit 超強的一行畫圖指令 (加上酷炫的顏色)
+                    st.bar_chart(chart_data, color="#1f77b4")
+                    # ==========================================
+                    
                 else: 
                     st.info("目前沒有足夠數據可分析。")
                     
