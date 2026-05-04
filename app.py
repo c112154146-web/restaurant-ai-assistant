@@ -130,13 +130,50 @@ with tab2:
                 except Exception as e:
                     st.error(f"❌ 辨識或寫入失敗：{e}")
 
-# --- 分頁 3：語音辨識 (保留外觀，下一步處理) ---
+# --- 分頁 3：語音辨識 (🌟 換上 Gemini 2.5 Flash 萬能大腦) ---
 with tab3:
     st.header("🎙️ 語音操作")
-    st.info("即將串接 Whisper 語音模型...")
+    st.write("請對著麥克風說出指令，例如：「進貨高麗菜五個」。")
+    
     audio_file = st.audio_input("點擊錄音")
+    
     if audio_file:
-        st.success("錄音已擷取！準備開發中...")
+        if st.button("🧠 開始 Gemini 語音解析", use_container_width=True):
+            with st.spinner("Gemini 正在聆聽並轉譯文字..."):
+                try:
+                    import tempfile
+                    import os
+                    
+                    # 1. 儲存音訊暫存檔
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+                        tmp_file.write(audio_file.getvalue())
+                        tmp_filename = tmp_file.name
+                    
+                    # 2. 上傳音訊給 Gemini 並請求轉譯
+                    audio_upload = genai.upload_file(path=tmp_filename)
+                    model = genai.GenerativeModel('gemini-2.5-flash')
+                    
+                    # 透過 Prompt 限制它乖乖當個聽寫員
+                    prompt = "請將這段語音精準地轉譯成繁體中文文字，只需輸出文字結果，不要加上任何額外的問候或說明。"
+                    response = model.generate_content([audio_upload, prompt])
+                    
+                    spoken_text = response.text.strip()
+                    st.success(f"🗣️ AI 聽寫結果：『{spoken_text}』")
+                    
+                    # 3. 刪除暫存檔與雲端暫存檔 (保持環境乾淨)
+                    os.remove(tmp_filename)
+                    try:
+                        audio_upload.delete()
+                    except:
+                        pass
+                    
+                    # ==========================================
+                    # 下一步：這裡將補上您的 RapidFuzz 模糊比對與進貨寫入邏輯
+                    # ==========================================
+                    st.info("💡 語音轉文字成功！(資料庫寫入功能即將解鎖)")
+                    
+                except Exception as e:
+                    st.error(f"❌ 語音辨識失敗：{e}")
 # ================= 5. 開發者工具：一鍵重置 (側邊欄) =================
 with st.sidebar:
     st.header("⚙️ 開發者測試區")
