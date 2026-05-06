@@ -277,7 +277,7 @@ with tab1:
                         st.warning(f"👉 {item}")
                         
                     import urllib.parse
-                    msg_lines = ["【📦 鼎極餐廳 - AI 緊急採購單】", f"📅 日期：{today.strftime('%Y/%m/%d')}", "------------------------"]
+                    msg_lines = ["【📦 AI 緊急採購單】", f"📅 日期：{today.strftime('%Y/%m/%d')}", "------------------------"]
                     for item in alert_items: msg_lines.append(f"🛒 {item.replace('**', '')}")
                     msg_lines.append("------------------------\n🤖 此訊息由 AI 倉儲系統自動生成。")
                     line_url = f"https://line.me/R/msg/text/?{urllib.parse.quote(chr(10).join(msg_lines))}"
