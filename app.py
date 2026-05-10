@@ -52,14 +52,20 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
 
         records = sheet.get_all_records()
         target_row = None
-        current_stock = 0
+        current_stock = 0.0
+        unit = ""
 
         for i, rec in enumerate(records):
             if str(rec.get('商品名稱')) == product_name:
                 target_row = i + 2
-                current_stock = rec.get('庫存數量', 0)
-                if str(current_stock).strip() == '': current_stock = 0
-                else: current_stock = int(current_stock)
+                
+                # 💡 亮點：智慧萃取數字與單位 (解決 '1.0 箱' 報錯的問題)
+                stock_str = str(rec.get('庫存數量', '0'))
+                num_match = re.search(r'[\d\.]+', stock_str)
+                unit_match = re.search(r'[^\d\.\s]+', stock_str)
+                
+                current_stock = float(num_match.group()) if num_match else 0.0
+                unit = f" {unit_match.group()}" if unit_match else ""
                 break
 
         if target_row is None:
@@ -78,20 +84,28 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
             log_transaction('進貨紀錄', product_name, quantity, detail_info)
             return
 
+        # 計算新庫存並組裝單位
         if action == 'IN':
-            new_stock = current_stock + quantity
-            sheet.update_cell(target_row, stock_col_idx, new_stock)
-            st.success(f"✅ [進貨成功] {product_name} +{quantity} (目前: {new_stock})")
+            new_stock = current_stock + float(quantity)
+            # 如果是整數就不要顯示小數點 (例如 2.0 會變成 2)
+            new_stock_display = int(new_stock) if new_stock.is_integer() else new_stock
+            final_val = f"{new_stock_display}{unit}"
+            
+            sheet.update_cell(target_row, stock_col_idx, final_val)
+            st.success(f"✅ [進貨成功] {product_name} +{quantity} (目前: {final_val})")
             log_transaction('進貨紀錄', product_name, quantity, detail_info)
 
         elif action == 'WASTE':
-            if current_stock >= quantity:
-                new_stock = current_stock - quantity
-                sheet.update_cell(target_row, stock_col_idx, new_stock)
-                st.warning(f"⚠️ [報廢成功] {product_name} -{quantity} (剩餘: {new_stock})")
+            if current_stock >= float(quantity):
+                new_stock = current_stock - float(quantity)
+                new_stock_display = int(new_stock) if new_stock.is_integer() else new_stock
+                final_val = f"{new_stock_display}{unit}"
+                
+                sheet.update_cell(target_row, stock_col_idx, final_val)
+                st.warning(f"⚠️ [報廢成功] {product_name} -{quantity} (剩餘: {final_val})")
                 log_transaction('報廢紀錄', product_name, quantity, detail_info)
             else:
-                st.error(f"❌ [庫存不足] {product_name} 只有 {current_stock}，無法報廢 {quantity}")
+                st.error(f"❌ [庫存不足] {product_name} 只有 {current_stock}{unit}，無法報廢 {quantity}")
                 return
 
         if expiry and '有效期限' in headers:
