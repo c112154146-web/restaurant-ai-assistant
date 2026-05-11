@@ -204,6 +204,8 @@ with tab1:
                 df_in['日期'] = pd.to_datetime(df_in['日期'], format='mixed', errors='coerce') 
                 
                 today = datetime.now()
+
+                report_data = []
                 
                 alert_items = [] 
                 expiry_alerts = [] # 🌟 新增：即期品警報清單
