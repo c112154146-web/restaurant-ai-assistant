@@ -11,7 +11,7 @@ from PIL import Image
 from rapidfuzz import process, fuzz # 🌟 加入您的模糊比對套件
 
 # ================= 1. 版面與基本設定 =================
-st.set_page_config(page_title="餐廳倉儲助手", page_icon="📦", layout="centered")
+st.set_page_config(page_title="倉儲助手", page_icon="📦", layout="centered")
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 def connect_spreadsheet():
@@ -186,7 +186,7 @@ st.markdown("歡迎使用 AI 庫存管理系統")
 tab1, tab2, tab3, tab4 = st.tabs(["📊 庫存預測", "📸 單據辨識", "🎙️ 語音助理", "🕒 操作紀錄"])
 
 with tab1:
-    st.header("📊 庫存戰情室與採購建議")
+    st.header("📊 庫存預測與採購建議")
     
     SAFE_STOCK_LEVEL = 5 
     
