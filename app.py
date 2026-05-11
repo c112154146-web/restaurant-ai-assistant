@@ -197,7 +197,7 @@ with tab1:
                 df_stock = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
                 df_in = pd.DataFrame(doc.worksheet('進貨紀錄').get_all_records())
 
-               df_stock['庫存數量'] = df_stock['庫存數量'].apply(extract_number)
+                df_stock['庫存數量'] = df_stock['庫存數量'].apply(extract_number)
                 if '數量' in df_in.columns: df_in['數量'] = df_in['數量'].apply(extract_number)
 
                 # ✅ 加入 format='mixed' 和 errors='coerce'，讓它能接受所有日期格式
