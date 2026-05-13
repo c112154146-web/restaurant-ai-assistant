@@ -1,30 +1,26 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import json
 import re
 import uuid
+import cn2an
 import google.generativeai as genai
+
+from datetime import datetime
 from PIL import Image
 from rapidfuzz import process, fuzz
-import cn2an
-import tempfile
-import os
-import urllib.parse
-
-# =========================================================
-# 1. 基本設定
-# =========================================================
+from oauth2client.service_account import ServiceAccountCredentials
 
 st.set_page_config(
-    page_title="AI 智慧倉儲助手",
+    page_title="AI 智慧倉儲系統",
     page_icon="📦",
     layout="wide"
 )
 
-genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+genai.configure(
+    api_key=st.secrets["GEMINI_API_KEY"]
+)
 
 SAFE_STOCK_LEVEL = 5
 
@@ -56,6 +52,191 @@ def connect_spreadsheet():
 # =========================================================
 # 3. 工具函式
 # =========================================================
+def show_kpi_dashboard():
+
+    doc = connect_spreadsheet()
+
+    df_stock = pd.DataFrame(
+        doc.worksheet('工作表1').get_all_records()
+    )
+
+    df_in = pd.DataFrame(
+        doc.worksheet('進貨紀錄').get_all_records()
+    )
+
+    df_waste = pd.DataFrame(
+        doc.worksheet('報廢紀錄').get_all_records()
+    )
+
+    today = datetime.now().strftime('%Y-%m-%d')
+
+    today_in = 0
+    today_waste = 0
+
+    if not df_in.empty:
+        today_in = len(
+            df_in[
+                df_in['日期'].astype(str).str.contains(today)
+            ]
+        )
+
+    if not df_waste.empty:
+        today_waste = len(
+            df_waste[
+                df_waste['日期'].astype(str).str.contains(today)
+            ]
+        )
+
+    low_stock = 0
+    expiry_count = 0
+
+    for _, row in df_stock.iterrows():
+
+        stock = extract_number(
+            row.get('庫存數量', 0)
+        )
+
+        if stock <= 5:
+            low_stock += 1
+
+        expiry = str(
+            row.get('有效期限', '')
+        ).strip()
+
+        if expiry:
+
+            try:
+
+                days = (
+                    pd.to_datetime(expiry)
+                    - datetime.now()
+                ).days
+
+                if days <= 3:
+                    expiry_count += 1
+
+            except:
+                pass
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric(
+        "📦 今日進貨",
+        today_in
+    )
+
+    col2.metric(
+        "🗑️ 今日報廢",
+        today_waste
+    )
+
+    col3.metric(
+        "⚠️ 即期商品",
+        expiry_count
+    )
+
+    col4.metric(
+        "🚨 低庫存",
+        low_stock
+    )
+
+def ai_chat_mode():
+
+    st.subheader("🤖 AI 倉儲助理")
+
+    user_question = st.chat_input(
+        "請詢問庫存問題..."
+    )
+
+    if user_question:
+
+        doc = connect_spreadsheet()
+
+        df_stock = pd.DataFrame(
+            doc.worksheet('工作表1').get_all_records()
+        )
+
+        df_out = pd.DataFrame(
+            doc.worksheet('出庫紀錄').get_all_records()
+        )
+
+        model = genai.GenerativeModel(
+            'gemini-2.5-flash'
+        )
+
+        prompt = f"""
+你是餐廳智慧倉儲 AI。
+
+目前庫存：
+
+{df_stock.to_string()}
+
+出庫紀錄：
+
+{df_out.to_string()}
+
+使用者問題：
+
+{user_question}
+
+請使用繁體中文回答。
+"""
+
+        response = model.generate_content(
+            prompt
+        )
+
+        st.chat_message("user").write(
+            user_question
+        )
+
+        st.chat_message("assistant").write(
+            response.text
+        )
+
+def ai_purchase_suggestion():
+
+    st.subheader("🧠 AI 採購建議")
+
+    doc = connect_spreadsheet()
+
+    df_stock = pd.DataFrame(
+        doc.worksheet('工作表1').get_all_records()
+    )
+
+    df_out = pd.DataFrame(
+        doc.worksheet('出庫紀錄').get_all_records()
+    )
+
+    model = genai.GenerativeModel(
+        'gemini-2.5-flash'
+    )
+
+    prompt = f"""
+你是餐廳採購 AI。
+
+目前庫存：
+
+{df_stock.to_string()}
+
+出庫紀錄：
+
+{df_out.to_string()}
+
+請分析：
+
+1. 哪些商品快缺貨
+2. 哪些消耗最快
+3. 建議補貨量
+
+請使用條列式繁體中文。
+"""
+
+    response = model.generate_content(
+        prompt
+    )
+
+    st.info(response.text)
 
 def extract_number(val):
     if pd.isna(val):
@@ -418,14 +599,22 @@ def smart_parse_and_execute(text):
 # 6. UI
 # =========================================================
 
-st.title("📦 AI 智慧倉儲助手")
+st.title("📦 AI 智慧倉儲系統")
 
-tabs = st.tabs([
-    "📊 AI 預測",
-    "📸 OCR 單據",
-    "🎙️ 語音操作",
-    "🕒 操作紀錄"
+show_kpi_dashboard()
+
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📊 AI 分析",
+    "📸 OCR",
+    "🎙️ 語音",
+    "🕒 紀錄"
 ])
+
+with tab1:
+
+    ai_purchase_suggestion()
+
+    ai_chat_mode()
 
 # =========================================================
 # TAB1
