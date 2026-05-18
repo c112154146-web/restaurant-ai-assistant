@@ -7,6 +7,9 @@ import uuid
 import cn2an
 import google.generativeai as genai
 
+import tempfile  # 👈 新增這行：用來處理暫存錄音檔
+import os        # 👈 新增這行：用來刪除暫存檔
+
 from datetime import datetime
 from PIL import Image
 from rapidfuzz import process, fuzz
