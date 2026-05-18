@@ -291,42 +291,127 @@ def log_transaction(sheet_name, product_name, quantity, detail):
 # =========================================================
 # 4. 更新庫存（最佳化版）
 # =========================================================
+def process_fifo_outbound(product_name, out_qty, sheet, headers, records):
+    """
+    先進先出 (FIFO) 核心演算法
+    回傳: (布林值是否成功, 訊息字串, 實際更新的 batch_update 列表)
+    """
+    batches = []
+    
+    # 1. 找出該商品「所有大於0的庫存批次」
+    for i, rec in enumerate(records):
+        if str(rec.get('商品名稱')) == product_name:
+            stock = extract_number(rec.get('庫存數量', 0))
+            if stock > 0:
+                # 如果沒有填有效期限，給一個極大值讓它排在最後面
+                expiry_str = str(rec.get('有效期限', '')).strip()
+                if not expiry_str:
+                    expiry_str = '2099-12-31' 
+                    
+                batches.append({
+                    'row_idx': i + 2, # Google Sheets 是從 1 開始算，且有標題列
+                    'stock': float(stock),
+                    'expiry': expiry_str,
+                    'unit': extract_unit(str(rec.get('庫存數量', '')))
+                })
 
-def update_sheet_stock(
-    product_name,
-    quantity,
-    action,
-    expiry=None,
-    detail_info="一般"
-):
+    # 2. 依照「有效期限」由近到遠排序 (Sort) - 這是 FIFO 的靈魂！
+    batches.sort(key=lambda x: x['expiry'])
 
+    # 3. 檢查總庫存是否足夠
+    total_stock = sum(b['stock'] for b in batches)
+    if total_stock < out_qty:
+        return False, f"庫存不足！(目前總計只剩 {total_stock})", []
+
+    # 4. 開始執行 FIFO 逐批扣除
+    updates = []
+    remaining_to_deduct = float(out_qty)
+
+    for batch in batches:
+        if remaining_to_deduct <= 0:
+            break # 已經扣完，跳出迴圈
+
+        # 決定這批要扣多少 (取這批的庫存量 和 剩餘要扣的量 兩者間的最小值)
+        deduct_amount = min(batch['stock'], remaining_to_deduct)
+        new_stock = batch['stock'] - deduct_amount
+        remaining_to_deduct -= deduct_amount
+
+        # 準備 Google Sheets 的更新格式
+        stock_col = headers.index('庫存數量') + 1
+        
+        # 整理數字格式 (如果是整數就不顯示小數點)
+        if new_stock.is_integer():
+            new_stock = int(new_stock)
+        final_stock_str = f"{new_stock} {batch['unit']}".strip()
+
+        # 將更新指令加入清單
+        updates.append({
+            "range": f"{gspread.utils.rowcol_to_a1(batch['row_idx'], stock_col)}",
+            "values": [[final_stock_str]]
+        })
+
+        # 同步更新「最後更新時間」
+        if '最後更新時間' in headers:
+            time_col = headers.index('最後更新時間') + 1
+            updates.append({
+                "range": f"{gspread.utils.rowcol_to_a1(batch['row_idx'], time_col)}",
+                "values": [[datetime.now().strftime('%Y-%m-%d %H:%M:%S')]]
+            })
+
+    return True, "成功", updates
+
+def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info="一般"):
     try:
-
         doc = connect_spreadsheet()
         sheet = doc.worksheet('工作表1')
-
         headers = sheet.row_values(1)
-
         records = sheet.get_all_records()
 
-        stock_col = headers.index('庫存數量') + 1
+        quantity = float(quantity)
 
-        target_row = None
-        current_stock = 0.0
-        current_unit = ""
+        # =================================================
+        # 進貨 (IN) - 改為永遠新增一個獨立批次
+        # =================================================
+        if action == 'IN':
+            new_row = [""] * len(headers)
+            if '商品名稱' in headers: new_row[headers.index('商品名稱')] = product_name
+            if '庫存數量' in headers: new_row[headers.index('庫存數量')] = quantity
+            if '有效期限' in headers: new_row[headers.index('有效期限')] = expiry or ""
+            if '最後更新時間' in headers: new_row[headers.index('最後更新時間')] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            if 'ID' in headers: new_row[headers.index('ID')] = str(uuid.uuid4())[:8]
 
-        for i, rec in enumerate(records):
+            sheet.append_row(new_row)
+            
+            log_transaction('進貨紀錄', product_name, quantity, detail_info)
+            st.success(f"進貨成功：{product_name} +{quantity} (已建立新批次)")
 
-            if str(rec.get('商品名稱')) == product_name:
+        # =================================================
+        # 出庫與報廢 (OUT / WASTE) - 啟動 FIFO 演算法
+        # =================================================
+        elif action in ['OUT', 'WASTE']:
+            # 呼叫我們的 FIFO 演算法
+            success, msg, updates = process_fifo_outbound(product_name, quantity, sheet, headers, records)
 
-                target_row = i + 2
+            if not success:
+                st.error(f"{product_name} 扣帳失敗：{msg}")
+                return
 
-                stock_str = str(rec.get('庫存數量', '0'))
+            # 一次性更新 Google Sheets
+            sheet.batch_update(updates)
 
-                current_stock = extract_number(stock_str)
-                current_unit = extract_unit(stock_str)
+            # 寫入紀錄
+            if action == 'OUT':
+                log_transaction('出庫紀錄', product_name, quantity, detail_info)
+                st.warning(f"出庫成功：{product_name} -{quantity} (依 FIFO 原則扣除)")
+            else:
+                log_transaction('報廢紀錄', product_name, quantity, detail_info)
+                st.error(f"報廢成功：{product_name} -{quantity} (依 FIFO 原則扣除)")
 
-                break
+        else:
+            st.error("未知的操作指令")
+
+    except Exception as e:
+        st.error(f"系統更新失敗：{e}")
 
         # =================================================
         # 新商品
@@ -899,7 +984,7 @@ with tab4:
             '報廢紀錄': '🗑️ 報廢'
         }
 
-        for sheet_name, action_name in mapping.items():
+        for sheet_name, action_name 在 mapping.items():
 
             try:
 
@@ -940,3 +1025,18 @@ with tab4:
 
     except Exception as e:
         st.error(e)
+
+# 假設 df_all 是您已經抓下來並整理好的歷史紀錄 DataFrame
+if not df_all.empty:
+    st.markdown("---")
+    st.subheader("📥 歷史報表匯出")
+    
+    # 關鍵：加上 utf-8-sig，這樣下載後用微軟 Excel 打開才不會是亂碼！
+    csv = df_all.to_csv(index=False).encode('utf-8-sig')
+    
+    st.download_button(
+        label="下載完整歷史紀錄 (CSV檔)",
+        data=csv,
+        file_name=f"鼎極餐廳_倉儲紀錄_{datetime.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv",
+    )
