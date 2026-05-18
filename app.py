@@ -984,7 +984,7 @@ with tab4:
             '報廢紀錄': '🗑️ 報廢'
         }
 
-        for sheet_name, action_name 在 mapping.items():
+        for sheet_name, action_name in mapping.items():
 
             try:
 
