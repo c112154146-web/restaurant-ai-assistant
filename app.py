@@ -27,6 +27,29 @@ genai.configure(
 
 SAFE_STOCK_LEVEL = 5
 
+SAFE_STOCK_LEVEL = 5
+
+# =========================================================
+# ⭐ 新增：餐廳食譜/配方表 (BOM)
+# =========================================================
+MENU_RECIPES = {
+    "🍔 經典牛肉漢堡": {
+        "漢堡麵包": 1,
+        "牛肉串": 1,  # 假設拿牛肉串的肉來做
+        "高麗菜": 0.1 # 消耗 0.1 顆
+    },
+    "🥪 總匯三明治": {
+        "吐司": 3,
+        "雞蛋": 1,
+        "火腿": 1
+    },
+    "🍳 起司蛋餅": {
+        "蛋餅皮": 1,
+        "雞蛋": 1,
+        "起司片": 1
+    }
+}
+
 # =========================================================
 # 2. Google Sheets 連線（加快速度）
 # =========================================================
@@ -691,11 +714,12 @@ st.title("📦 AI 智慧倉儲系統")
 
 show_kpi_dashboard()
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📊 AI 分析",
     "📸 OCR",
     "🎙️ 語音",
-    "🕒 紀錄"
+    "🕒 紀錄",
+    "🍔 POS出餐"
 ])
 
 # =========================================================
@@ -1034,6 +1058,37 @@ with tab4:
 
     except Exception as e:
         st.error(e)
+
+# =========================================================
+# TAB5 (POS 出餐與自動扣料)
+# =========================================================
+with tab5:
+    st.header("🍔 POS 一鍵出餐 (食譜自動扣料)")
+    st.write("點擊下方餐點，系統將自動展開食譜，並依照 FIFO 原則扣除對應的原料庫存。")
+    
+    st.markdown("---")
+    
+    # 用欄位排版，讓按鈕並排顯示
+    cols = st.columns(3)
+    
+    for idx, (meal_name, ingredients) in enumerate(MENU_RECIPES.items()):
+        with cols[idx % 3]:
+            # 建立出餐按鈕
+            if st.button(f"賣出 1 份\n{meal_name}", use_container_width=True):
+                
+                st.info(f"正在製作 {meal_name}，準備扣除原料...")
+                
+                # 遍歷這個餐點需要的所有原料，一個一個呼叫我們寫好的扣帳函式
+                for item_name, qty in ingredients.items():
+                    update_sheet_stock(
+                        product_name=item_name,
+                        quantity=qty,
+                        action='OUT',
+                        detail_info=f"POS前台出餐：{meal_name}"
+                    )
+                
+                st.success(f"✅ {meal_name} 出餐完成！庫存已全數更新。")
+                st.balloons() # 放個氣球慶祝一下
 
 # 假設 df_all 是您已經抓下來並整理好的歷史紀錄 DataFrame
 if not df_all.empty:
