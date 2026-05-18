@@ -581,9 +581,9 @@ def smart_parse_and_execute(text):
 
     action = None
 
-    in_kw = ['進貨', '新增', '補貨', '入庫']
-    out_kw = ['使用', '用了', '消耗', '出餐']
-    waste_kw = ['報廢', '壞掉', '過期', '爛掉']
+    in_kw = ['進貨', '新增', '補貨', '入庫', '買了']
+    out_kw = ['使用', '用了', '消耗', '出餐', '銷貨', '賣出', '賣了', '扣掉']
+    waste_kw = ['報廢', '壞掉', '過期', '爛掉', '丟掉', '破掉']
 
     for k in in_kw:
         if k in text:
@@ -602,7 +602,7 @@ def smart_parse_and_execute(text):
         for k in waste_kw:
             if k in text:
                 action = 'WASTE'
-                text = text.replace(k, '', 1)
+                text = text.替换(k, '', 1)
                 break
 
     if not action:
