@@ -1098,7 +1098,7 @@ with tab5:
                     f"每賣出一份，固定消耗【{ing}】多少數量？",
                     min_value=0.01,
                     value=1.0,
-                    step=0.1，
+                    step=0.1,
                     key=f"setup_{new_meal_name}_{ing}" # 確保 key 唯一
                 )
                 new_recipe[ing] = qty
