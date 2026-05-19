@@ -1081,7 +1081,14 @@ with tab5:
         new_meal_name = st.text_input("1. 輸入新餐點名稱", placeholder="例如：培根蛋吐司")
         
         # 動態從 Google Sheets 撈出目前現有的所有原料品項
-        available_ingredients = get_all_products()
+        # ✅ 修改後的寫法：
+        raw_ingredients = get_all_products()
+        
+        # 利用 set() 剔除重複的品項，再用 sorted() 讓選單按照筆畫排序，更專業！
+        available_ingredients = sorted(list(set(raw_ingredients)))
+        
+        # 把空白的選項過濾掉 (防止試算表有空行)
+        available_ingredients = [item for item in available_ingredients if item.strip() != ""]
         
         selected_ings = st.multiselect(
             "2. 選擇這道餐點會消耗哪些原料",
