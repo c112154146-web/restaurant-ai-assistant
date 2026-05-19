@@ -50,6 +50,7 @@ if "menu_recipes" not in st.session_state:
 
 @st.cache_resource
 def connect_spreadsheet():
+    
     creds_dict = json.loads(
         st.secrets["gcp_service_account"]["credentials"]
     )
@@ -67,28 +68,20 @@ def connect_spreadsheet():
     client = gspread.authorize(creds)
 
     return client.open('智慧庫存系統')
-
-
+    
+@st.cache_data(ttl=60)
+def fetch_sheet_data_cached(sheet_name):
+    doc = connect_spreadsheet()
+    return doc.worksheet(sheet_name).get_all_records()
 # =========================================================
 # 3. 工具函式
 # =========================================================
 def show_kpi_dashboard():
 
-    doc = connect_spreadsheet()
+    df_stock = pd.DataFrame(fetch_sheet_data_cached('工作表1'))
+    df_in = pd.DataFrame(fetch_sheet_data_cached('進貨紀錄'))
+    df_waste = pd.DataFrame(fetch_sheet_data_cached('報廢紀錄'))
 
-    df_stock = pd.DataFrame(
-        doc.worksheet('工作表1').get_all_records()
-    )
-
-    df_in = pd.DataFrame(
-        doc.worksheet('進貨紀錄').get_all_records()
-    )
-
-    df_waste = pd.DataFrame(
-        doc.worksheet('報廢紀錄').get_all_records()
-    )
-
-    # ✅ 正確寫法：
     today = datetime.now().strftime('%Y-%m-%d')
 
     today_in = 0
