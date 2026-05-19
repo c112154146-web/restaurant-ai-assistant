@@ -770,7 +770,7 @@ with tab1:
 
             report = []
 
-            today = datetime.now()
+            today = datetime.当前()
 
             for _, row in df_stock.iterrows():
 
@@ -992,6 +992,9 @@ with tab3:
 # =========================================================
 # TAB4 (歷史紀錄與報表匯出)
 # =========================================================
+# =========================================================
+# TAB4 (歷史紀錄與報表匯出)
+# =========================================================
 with tab4:
     st.header("🕒 最新紀錄")
 
@@ -1007,48 +1010,47 @@ with tab4:
         # 1. 讀取並整合所有紀錄分頁
         for sheet_name, action_name in mapping.items():
             try:
-                # 這裡改用我們寫好的快取，速度更快且防 API 爆炸
-                data = fetch_sheet_data_cached(sheet_name)
-                if data:
-                    df = pd.DataFrame(data)
-                    if not df.empty:
+                # 使用快取函式撈取歷史紀錄
+                data_records = fetch_sheet_data_cached(sheet_name)
+                if data_records:
+                    df_single = pd.DataFrame(data_records)
+                    if not df_single.empty:
                         # 標註這個紀錄的動作類型
-                        df['動作'] = action_name
-                        dfs.append(df)
+                        df_single['動作'] = action_name
+                        dfs.append(df_single)
             except Exception as sheet_err:
-                # 個別分頁讀取失敗時跳過，不影響整個網頁
                 continue
 
         # 2. 顯示動態紀錄牆
         if dfs:
-            df_all_records = pd.concat(dfs)
+            df_history_wall = pd.concat(dfs)
 
-            # 確保有日期欄位可以排序，若欄位名稱不同請依試算表修改（例如 '時間' 或 '最後更新時間'）
-            time_col = '日期' if '日期' in df_all_records.columns else ('最後更新時間' if '最後更新時間' in df_all_records.columns else None)
+            # 檢查並排序時間
+            time_col = '日期' if '日期' in df_history_wall.columns else ('最後更新時間' if '最後更新時間' in df_history_wall.columns else None)
             
             if time_col:
-                df_all_records[time_col] = pd.to_datetime(df_all_records[time_col], errors='coerce')
-                df_all_records = df_all_records.sort_values(by=time_col, ascending=False)
+                df_history_wall[time_col] = pd.to_datetime(df_history_wall[time_col], errors='coerce')
+                df_history_wall = df_history_wall.sort_values(by=time_col, ascending=False)
 
             st.dataframe(
-                df_all_records.head(20),
+                df_history_wall.head(20),
                 use_container_width=True
             )
         else:
             st.info("尚無歷史紀錄")
 
-        # 3. 📥 倉儲資料匯出區塊（獨立放在迴圈外面，最下方）
+        # 3. 📥 倉儲資料匯出區塊（變數名稱完全獨立，絕不衝突）
         st.markdown("---")
         st.subheader("📥 倉儲資料匯出")
         
-        # 利用快取函式撈取庫存總表
-        df_stock_download = pd.DataFrame(fetch_sheet_data_cached('工作表1'))
+        # 100% 確保這裡撈出來的東西叫做 df_stock_final
+        df_stock_final = pd.DataFrame(fetch_sheet_data_cached('工作表1'))
         
-        if not df_stock_download.empty:
-            csv = df_stock_download.to_csv(index=False).encode('utf-8-sig')
+        if not df_stock_final.empty:
+            csv_data = df_stock_final.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
                 label="下載最新庫存總表 (CSV檔)",
-                data=csv,
+                data=csv_data,
                 file_name=f"餐廳_庫存總表_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv",
                 use_container_width=True
@@ -1097,7 +1099,7 @@ with tab5:
                     f"每賣出一份，固定消耗【{ing}】多少數量？",
                     min_value=0.01,
                     value=1.0,
-                    step=0.1,
+                    step=0.1，
                     key=f"setup_{new_meal_name}_{ing}" # 確保 key 唯一
                 )
                 new_recipe[ing] = qty
