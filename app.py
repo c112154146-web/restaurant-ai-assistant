@@ -1118,36 +1118,80 @@ with tab5:
     # -----------------------------------------------------
     # 【右半邊：前台一鍵出餐】
     # -----------------------------------------------------
+    # -----------------------------------------------------
+    # 【右半邊：前台一鍵出餐 - 安全鎖定版】
+    # -----------------------------------------------------
     with pos_col:
         st.subheader("🛒 前台一鍵出餐 (自動連動 FIFO)")
         st.write("點擊餐點按鈕，系統會自動拆解食譜並扣除庫存：")
         
         st.markdown("---")
         
-        # 讀取剛剛暫存的所有菜色（包含預設的與用戶自己新增的）
         current_menu = st.session_state.menu_recipes
         
-        # 畫出前台按鈕
         grid_cols = st.columns(2)
         for idx, (meal_name, ingredients) in enumerate(current_menu.items()):
             with grid_cols[idx % 2]:
                 
-                # 建立按鈕，並在按鈕下方用小字顯示它的配方
                 st.markdown(f"**{meal_name}**")
                 recipe_text = " / ".join([f"{k}:{v}" for k, v in ingredients.items()])
                 st.caption(f"配方：{recipe_text}")
                 
                 if st.button("🛒 賣出一份", key=f"pos_btn_{meal_name}", use_container_width=True):
-                    st.toast(f"正在製作 {meal_name}...")
+                    st.toast(f"正在檢查 {meal_name} 的原料庫存...")
                     
-                    # 依據該餐點的配方，逐一自動扣除 Google Sheets 庫存
-                    for item_name, qty in ingredients.items():
-                        update_sheet_stock(
-                            product_name=item_name,
-                            quantity=qty,
-                            action='OUT',
-                            detail_info=f"POS出餐：{meal_name}"
-                        )
-                    
-                    st.success(f"✅ {meal_name} 出餐成功！已依 FIFO 扣除原料。")
-                    st.balloons()
+                    # 1. 讀取最新庫存總表（用快取避免爆炸）
+                    try:
+                        records = fetch_sheet_data_cached('工作表1')
+                        
+                        # 統計目前每種商品的「總可用庫存」
+                        total_stock_map = {}
+                        for rec in records:
+                            p_name = str(rec.get('商品名稱'))
+                            # 提取數字（如果你的提取數字函式叫 extract_number）
+                            try:
+                                stock_val = float(extract_number(rec.get('庫存數量', 0)))
+                            except:
+                                stock_val = 0.0
+                            
+                            if p_name not in total_stock_map:
+                                total_stock_map[p_name] = 0.0
+                            total_stock_map[p_name] += stock_val
+                    except Exception as err:
+                        st.error(f"無法讀取庫存進行預檢：{err}")
+                        continue
+
+                    # =========================================================
+                    # 🛑 階段一：預先檢查所有原料是否充足
+                    # =========================================================
+                    all_ingredients_sufficient = True
+                    insufficient_details = []
+
+                    for item_name, required_qty in ingredients.items():
+                        current_available = total_stock_map.get(item_name, 0.0)
+                        if current_available < required_qty:
+                            all_ingredients_sufficient = False
+                            insufficient_details.append(f"❌ 【{item_name}】還差 {required_qty - current_available} 個 (目前剩 {current_available})")
+
+                    # =========================================================
+                    # 🚀 階段二：根據檢查結果決定要不要扣帳
+                    # =========================================================
+                    if not all_ingredients_sufficient:
+                        # 只要有任何一個不夠，直接報錯攔截，什麼都不扣！
+                        st.error(f"🚨 {meal_name} 出餐失敗！原料庫存不足：")
+                        for msg in insufficient_details:
+                            st.write(msg)
+                    else:
+                        # 確定通通都夠，才啟動集體扣除
+                        st.info(f"庫存檢查通過！開始製作 {meal_name}...")
+                        
+                        for item_name, qty in ingredients.items():
+                            update_sheet_stock(
+                                product_name=item_name,
+                                quantity=qty,
+                                action='OUT',
+                                detail_info=f"POS出餐：{meal_name}"
+                            )
+                        
+                        st.success(f"✅ {meal_name} 出餐成功！已依 FIFO 扣除原料。")
+                        st.balloons()
