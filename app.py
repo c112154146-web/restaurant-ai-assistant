@@ -1135,9 +1135,15 @@ with tab5:
                 st.markdown(f"##### ✏️ 更改【{edit_meal_target}】的配方")
                 
                 # 自動將原本就有的原料預設勾選起來 (用 default 參數)
+                # ✅ 替換成這段安全寫法：
+                # 先把「這道菜原有的原料」硬塞進「目前的庫存選項」中，並去重複
+                safe_options = list(set(available_ingredients + list(current_recipe.keys())))
+                safe_options = sorted([item for item in safe_options if item.strip() != ""])
+                
+                # 自動將原本就有的原料預設勾選起來
                 edit_selected_ings = st.multiselect(
                     "調整原料品項",
-                    options=available_ingredients,
+                    options=safe_options,
                     default=list(current_recipe.keys()),
                     key=f"edit_ings_select_{edit_meal_target}"
                 )
