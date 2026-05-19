@@ -973,7 +973,7 @@ with tab3:
                     [audio_upload, prompt]
                 )
 
-                spoken = response.text.strip()
+                spoken = response.text。strip()
 
                 st.success(f"辨識結果：{spoken}")
 
@@ -1013,14 +1013,26 @@ with tab4:
                     doc.worksheet(sheet_name).get_all_records()
                 )
 
-                if not df.empty:
+# ✅ 修改後的寫法：先去把資料抓下來，並取名叫 df_all
+st.markdown("---")
+st.subheader("📥 倉儲資料匯出")
 
-                    df['動作'] = action_name
+# 利用我們寫好的快取函式，瞬間把「工作表1」的資料抓下來轉成 DataFrame
+df_all = pd.DataFrame(fetch_sheet_data_cached('工作表1'))
 
-                    dfs.append(df)
-
-            except:
-                pass
+# 確認資料庫不是空的，才顯示下載按鈕
+if not df_all.empty:
+    # 加上 utf-8-sig 確保 Excel 打開不會是亂碼
+    csv = df_all.to_csv(index=False).encode('utf-8-sig')
+    
+    st.download_button(
+        label="下載最新庫存總表 (CSV檔)",
+        data=csv,
+        file_name=f"鼎極餐廳_庫存總表_{datetime.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv",
+    )
+else:
+    st.info("目前資料庫中還沒有資料可以匯出喔！")
 
         if dfs:
 
