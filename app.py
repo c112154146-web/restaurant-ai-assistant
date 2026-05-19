@@ -88,7 +88,8 @@ def show_kpi_dashboard():
         doc.worksheet('報廢紀錄').get_all_records()
     )
 
-    today = datetime.当前()。strftime('%Y-%m-%d')
+    # ✅ 正確寫法：
+    today = datetime.now().strftime('%Y-%m-%d')
 
     today_in = 0
     today_waste = 0
