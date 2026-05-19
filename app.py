@@ -1151,17 +1151,3 @@ with tab5:
                     
                     st.success(f"✅ {meal_name} 出餐成功！已依 FIFO 扣除原料。")
                     st.balloons()
-# 假設 df_all 是您已經抓下來並整理好的歷史紀錄 DataFrame
-if not df_all.empty:
-    st.markdown("---")
-    st.subheader("📥 歷史報表匯出")
-    
-    # 關鍵：加上 utf-8-sig，這樣下載後用微軟 Excel 打開才不會是亂碼！
-    csv = df_all.to_csv(index=False).encode('utf-8-sig')
-    
-    st.download_button(
-        label="下載完整歷史紀錄 (CSV檔)",
-        data=csv,
-        file_name=f"鼎極餐廳_倉儲紀錄_{datetime.now().strftime('%Y%m%d')}.csv",
-        mime="text/csv",
-    )
