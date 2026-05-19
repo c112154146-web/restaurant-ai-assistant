@@ -32,23 +32,17 @@ SAFE_STOCK_LEVEL = 5
 # =========================================================
 # ⭐ 新增：餐廳食譜/配方表 (BOM)
 # =========================================================
-MENU_RECIPES = {
-    "🍔 經典牛肉漢堡": {
-        "漢堡麵包": 1,
-        "牛肉串": 1,  # 假設拿牛肉串的肉來做
-        "高麗菜": 0.1 # 消耗 0.1 顆
-    },
-    "🥪 總匯三明治": {
-        "吐司": 3,
-        "雞蛋": 1,
-        "火腿": 1
-    },
-    "🍳 起司蛋餅": {
-        "蛋餅皮": 1,
-        "雞蛋": 1,
-        "起司片": 1
+SAFE_STOCK_LEVEL = 5
+
+# =========================================================
+# ⭐ 改為：動態餐廳食譜暫存（支援動態新增）
+# =========================================================
+if "menu_recipes" not in st.session_state:
+    st.session_state.menu_recipes = {
+        "🍔 經典牛肉漢堡": {"漢堡麵包": 1.0, "牛肉串": 1.0, "高麗菜": 0.1},
+        "🥪 總匯三明治": {"吐司": 3.0, "雞蛋": 1.0, "火腿": 1.0},
+        "🍳 起司蛋餅": {"蛋餅皮": 1.0, "雞蛋": 1.0, "起司片": 1.0}
     }
-}
 
 # =========================================================
 # 2. Google Sheets 連線（加快速度）
@@ -116,7 +110,7 @@ def show_kpi_dashboard():
     low_stock = 0
     expiry_count = 0
 
-    for _, row in df_stock.iterrows():
+    for _, row 在 df_stock.iterrows():
 
         stock = extract_number(
             row.get('庫存數量', 0)
@@ -135,7 +129,7 @@ def show_kpi_dashboard():
 
                 days = (
                     pd.to_datetime(expiry)
-                    - datetime.now()
+                    - datetime.当前()
                 ).days
 
                 if days <= 3:
@@ -1062,34 +1056,94 @@ with tab4:
 # =========================================================
 # TAB5 (POS 出餐與自動扣料)
 # =========================================================
+# =========================================================
+# TAB5 (POS 出餐與自訂食譜)
+# =========================================================
 with tab5:
-    st.header("🍔 POS 一鍵出餐 (食譜自動扣料)")
-    st.write("點擊下方餐點，系統將自動展開食譜，並依照 FIFO 原則扣除對應的原料庫存。")
+    st.header("🍔 POS 前台出餐與動態食譜設定")
     
-    st.markdown("---")
+    # 建立兩個區塊：左邊是新增菜色，右邊是點餐前台
+    setup_col, pos_col = st.columns([1, 1.2])
     
-    # 用欄位排版，讓按鈕並排顯示
-    cols = st.columns(3)
-    
-    for idx, (meal_name, ingredients) in enumerate(MENU_RECIPES.items()):
-        with cols[idx % 3]:
-            # 建立出餐按鈕
-            if st.button(f"賣出 1 份\n{meal_name}", use_container_width=True):
-                
-                st.info(f"正在製作 {meal_name}，準備扣除原料...")
-                
-                # 遍歷這個餐點需要的所有原料，一個一個呼叫我們寫好的扣帳函式
-                for item_name, qty in ingredients.items():
-                    update_sheet_stock(
-                        product_name=item_name,
-                        quantity=qty,
-                        action='OUT',
-                        detail_info=f"POS前台出餐：{meal_name}"
-                    )
-                
-                st.success(f"✅ {meal_name} 出餐完成！庫存已全數更新。")
-                st.balloons() # 放個氣球慶祝一下
+    # -----------------------------------------------------
+    # 【左半邊：後台食譜設定】
+    # -----------------------------------------------------
+    with setup_col:
+        st.subheader("➕ 開發新餐點 (設定配方)")
+        
+        new_meal_name = st.text_input("1. 輸入新餐點名稱", placeholder="例如：培根蛋吐司")
+        
+        # 動態從 Google Sheets 撈出目前現有的所有原料品項
+        available_ingredients = get_all_products()
+        
+        selected_ings = st.multiselect(
+            "2. 選擇這道餐點會消耗哪些原料",
+            options=available_ingredients,
+            help="可以複選。如果找不到原料，請先去【語音】或【OCR】進貨建檔喔！"
+        )
+        
+        # 用來暫存這道新菜的配方內容
+        new_recipe = {}
+        if selected_ings:
+            st.markdown("##### 3. 設定原料消耗量：")
+            for ing in selected_ings:
+                # 幫每個選中的原料建立一個數值輸入欄
+                qty = st.number_input(
+                    f"每賣出一份，固定消耗【{ing}】多少數量？",
+                    min_value=0.01,
+                    value=1.0,
+                    step=0.1,
+                    key=f"setup_{new_meal_name}_{ing}" # 確保 key 唯一
+                )
+                new_recipe[ing] = qty
+        
+        if st.button("💾 儲存新餐點配方", use_container_width=True):
+            if not new_meal_name.strip():
+                st.error("請輸入餐點名稱！")
+            elif not new_recipe:
+                st.error("請至少選擇一種原料並設定數量！")
+            else:
+                # 將新菜色寫入暫存字典中
+                st.session_state.menu_recipes[new_meal_name.strip()] = new_recipe
+                st.success(f"🎉 成功新增餐點：{new_meal_name}！")
+                st.rerun() # 重新整理網頁，讓右邊立刻看到新按鈕
 
+    # -----------------------------------------------------
+    # 【右半邊：前台一鍵出餐】
+    # -----------------------------------------------------
+    with pos_col:
+        st.subheader("🛒 前台一鍵出餐 (自動連動 FIFO)")
+        st.write("點擊餐點按鈕，系統會自動拆解食譜並扣除庫存：")
+        
+        st.markdown("---")
+        
+        # 讀取剛剛暫存的所有菜色（包含預設的與用戶自己新增的）
+        current_menu = st.session_state.menu_recipes
+        
+        # 畫出前台按鈕
+        grid_cols = st.columns(2)
+        for idx, (meal_name, ingredients) in enumerate(current_menu.items()):
+            with grid_cols[idx % 2]:
+                
+                # 建立按鈕，並在按鈕下方用小字顯示它的配方
+                st.markdown(f"**{meal_name}**")
+                recipe_text = " / ".join([f"{k}:{v}" for k, v in ingredients.items()])
+                st.caption(f"配方：{recipe_text}")
+                
+                if st.button("🛒 賣出一份", key=f"pos_btn_{meal_name}", use_container_width=True):
+                    st.toast(f"正在製作 {meal_name}...")
+                    
+                    # 依據該餐點的配方，逐一自動扣除 Google Sheets 庫存
+                    for item_name, qty in ingredients.items():
+                        update_sheet_stock(
+                            product_name=item_name,
+                            quantity=qty,
+                            action='OUT',
+                            detail_info=f"POS出餐：{meal_name}"
+                        )
+                    
+                    st.success(f"✅ {meal_name} 出餐成功！已依 FIFO 扣除原料。")
+                    st.balloons()
 # 假設 df_all 是您已經抓下來並整理好的歷史紀錄 DataFrame
 if not df_all.empty:
     st.markdown("---")
