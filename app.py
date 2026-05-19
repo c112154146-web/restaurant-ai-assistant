@@ -973,7 +973,7 @@ with tab3:
                     [audio_upload, prompt]
                 )
 
-                spoken = response.text。strip()
+                spoken = response.text.strip()
 
                 st.success(f"辨識結果：{spoken}")
 
@@ -1028,7 +1028,7 @@ if not df_all.empty:
     st.download_button(
         label="下載最新庫存總表 (CSV檔)",
         data=csv,
-        file_name=f"鼎極餐廳_庫存總表_{datetime.now().strftime('%Y%m%d')}.csv",
+        file_name=f"餐廳_庫存總表_{datetime.now().strftime('%Y%m%d')}.csv",
         mime="text/csv",
     )
 else:
@@ -1098,7 +1098,7 @@ with tab5:
                     f"每賣出一份，固定消耗【{ing}】多少數量？",
                     min_value=0.01,
                     value=1.0,
-                    step=0.1,
+                    step=0.1，
                     key=f"setup_{new_meal_name}_{ing}" # 確保 key 唯一
                 )
                 new_recipe[ing] = qty
