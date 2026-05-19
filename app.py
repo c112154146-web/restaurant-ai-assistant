@@ -1066,65 +1066,114 @@ with tab4:
 # =========================================================
 # TAB5 (POS 出餐與自訂食譜)
 # =========================================================
+# =========================================================
+# TAB5 (POS 出餐與動態食譜後台)
+# =========================================================
 with tab5:
     st.header("🍔 POS 前台出餐與動態食譜設定")
     
-    # 建立兩個區塊：左邊是新增菜色，右邊是點餐前台
+    # 建立兩個區塊：左邊是後台食譜管理，右邊是點餐前台
     setup_col, pos_col = st.columns([1, 1.2])
     
     # -----------------------------------------------------
-    # 【左半邊：後台食譜設定】
+    # 【左半邊：後台食譜管理（支援 新增 / 編輯 / 刪除）】
     # -----------------------------------------------------
     with setup_col:
-        st.subheader("➕ 開發新餐點 (設定配方)")
+        st.subheader("⚙️ 菜單後台管理")
         
-        new_meal_name = st.text_input("1. 輸入新餐點名稱", placeholder="例如：培根蛋吐司")
+        # 使用頁籤切換「新增」與「編輯/刪除」，讓版面極致精簡專業
+        manage_tab1, manage_tab2 = st.tabs(["➕ 新增餐點", "✏️ 編輯 / 刪除"])
         
-        # 動態從 Google Sheets 撈出目前現有的所有原料品項
-        # ✅ 修改後的寫法：
+        # 自動從 Google Sheets 撈出目前不重複的原料清單
         raw_ingredients = get_all_products()
-        
-        # 利用 set() 剔除重複的品項，再用 sorted() 讓選單按照筆畫排序，更專業！
         available_ingredients = sorted(list(set(raw_ingredients)))
-        
-        # 把空白的選項過濾掉 (防止試算表有空行)
         available_ingredients = [item for item in available_ingredients if item.strip() != ""]
         
-        selected_ings = st.multiselect(
-            "2. 選擇這道餐點會消耗哪些原料",
-            options=available_ingredients,
-            help="可以複選。如果找不到原料，請先去【語音】或【OCR】進貨建檔喔！"
-        )
-        
-        # 用來暫存這道新菜的配方內容
-        new_recipe = {}
-        if selected_ings:
-            st.markdown("##### 3. 設定原料消耗量：")
-            for ing in selected_ings:
-                # 幫每個選中的原料建立一個數值輸入欄
-                qty = st.number_input(
-                    f"每賣出一份，固定消耗【{ing}】多少數量？",
-                    min_value=0.01,
-                    value=1.0,
-                    step=0.1,
-                    key=f"setup_{new_meal_name}_{ing}" # 確保 key 唯一
-                )
-                new_recipe[ing] = qty
-        
-        if st.button("💾 儲存新餐點配方", use_container_width=True):
-            if not new_meal_name.strip():
-                st.error("請輸入餐點名稱！")
-            elif not new_recipe:
-                st.error("請至少選擇一種原料並設定數量！")
-            else:
-                # 將新菜色寫入暫存字典中
-                st.session_state.menu_recipes[new_meal_name.strip()] = new_recipe
-                st.success(f"🎉 成功新增餐點：{new_meal_name}！")
-                st.rerun() # 重新整理網頁，讓右邊立刻看到新按鈕
+        # --- 頁籤 1：新增餐點 ---
+        with manage_tab1:
+            new_meal_name = st.text_input("1. 輸入新餐點名稱", placeholder="例如：培根蛋吐司", key="add_meal_name")
+            selected_ings = st.multiselect(
+                "2. 選擇這道餐點會消耗哪些原料",
+                options=available_ingredients,
+                key="add_meal_ings"
+            )
+            
+            new_recipe = {}
+            if selected_ings:
+                st.markdown("##### 3. 設定原料消耗量：")
+                for ing in selected_ings:
+                    qty = st.number_input(
+                        f"每份消耗【{ing}】數量：",
+                        min_value=0.01, value=1.0, step=0.1,
+                        key=f"add_qty_{ing}"
+                    )
+                    new_recipe[ing] = qty
+            
+            if st.button("💾 儲存新餐點配方", use_container_width=True, key="save_new_btn"):
+                if not new_meal_name.strip():
+                    st.error("請輸入餐點名稱！")
+                elif not new_recipe:
+                    st.error("請至少選擇一種原料並設定數量！")
+                else:
+                    st.session_state.menu_recipes[new_meal_name.strip()] = new_recipe
+                    st.success(f"🎉 成功新增餐點：{new_meal_name}！")
+                    st.rerun()
 
-    # -----------------------------------------------------
-    # 【右半邊：前台一鍵出餐】
-    # -----------------------------------------------------
+        # --- 頁籤 2：編輯與刪除現有餐點 ---
+        with manage_tab2:
+            if st.session_state.menu_recipes:
+                # 讓用戶選擇要調整哪道現有的餐點
+                edit_meal_target = st.selectbox(
+                    "選擇要管理的餐點",
+                    options=list(st.session_state.menu_recipes.keys()),
+                    key="edit_meal_select"
+                )
+                
+                # 抓出這道菜目前運作中的配方
+                current_recipe = st.session_state.menu_recipes[edit_meal_target]
+                
+                st.markdown(f"##### ✏️ 更改【{edit_meal_target}】的配方")
+                
+                # 自動將原本就有的原料預設勾選起來 (用 default 參數)
+                edit_selected_ings = st.multiselect(
+                    "調整原料品項",
+                    options=available_ingredients,
+                    default=list(current_recipe.keys()),
+                    key=f"edit_ings_select_{edit_meal_target}"
+                )
+                
+                updated_recipe = {}
+                if edit_selected_ings:
+                    for ing in edit_selected_ings:
+                        # 如果是原本就有的原料，數值欄位預設帶入原本設定的數量，否則帶入 1.0
+                        default_qty = current_recipe.get(ing, 1.0)
+                        qty = st.number_input(
+                            f"每份消耗【{ing}】數量：",
+                            min_value=0.01, value=float(default_qty), step=0.1,
+                            key=f"edit_qty_{edit_meal_target}_{ing}"
+                        )
+                        updated_recipe[ing] = qty
+                
+                # 按鈕排版：左邊更新，右邊刪除
+                btn_col1, btn_col2 = st.columns(2)
+                
+                with btn_col1:
+                    if st.button("💾 更新配方", use_container_width=True, type="primary", key="update_recipe_btn"):
+                        if not updated_recipe:
+                            st.error("配方不能完全沒有原料！")
+                        else:
+                            st.session_state.menu_recipes[edit_meal_target] = updated_recipe
+                            st.success(f"⚙️ {edit_meal_target} 配方修改成功！")
+                            st.rerun()
+                            
+                with btn_col2:
+                    if st.button("❌ 刪除餐點", use_container_width=True, key="delete_recipe_btn"):
+                        del st.session_state.menu_recipes[edit_meal_target]
+                        st.warning(f"🗑️ 已將【{edit_meal_target}】從菜單移除")
+                        st.rerun()
+            else:
+                st.info("目前菜單內沒有任何自訂餐點。")
+
     # -----------------------------------------------------
     # 【右半邊：前台一鍵出餐 - 安全鎖定版】
     # -----------------------------------------------------
@@ -1147,20 +1196,15 @@ with tab5:
                 if st.button("🛒 賣出一份", key=f"pos_btn_{meal_name}", use_container_width=True):
                     st.toast(f"正在檢查 {meal_name} 的原料庫存...")
                     
-                    # 1. 讀取最新庫存總表（用快取避免爆炸）
                     try:
                         records = fetch_sheet_data_cached('工作表1')
-                        
-                        # 統計目前每種商品的「總可用庫存」
                         total_stock_map = {}
                         for rec in records:
                             p_name = str(rec.get('商品名稱'))
-                            # 提取數字（如果你的提取數字函式叫 extract_number）
                             try:
                                 stock_val = float(extract_number(rec.get('庫存數量', 0)))
                             except:
                                 stock_val = 0.0
-                            
                             if p_name not in total_stock_map:
                                 total_stock_map[p_name] = 0.0
                             total_stock_map[p_name] += stock_val
@@ -1168,9 +1212,7 @@ with tab5:
                         st.error(f"無法讀取庫存進行預檢：{err}")
                         continue
 
-                    # =========================================================
-                    # 🛑 階段一：預先檢查所有原料是否充足
-                    # =========================================================
+                    # 階段一：預檢
                     all_ingredients_sufficient = True
                     insufficient_details = []
 
@@ -1180,18 +1222,13 @@ with tab5:
                             all_ingredients_sufficient = False
                             insufficient_details.append(f"❌ 【{item_name}】還差 {required_qty - current_available} 個 (目前剩 {current_available})")
 
-                    # =========================================================
-                    # 🚀 階段二：根據檢查結果決定要不要扣帳
-                    # =========================================================
+                    # 階段二：集體扣帳
                     if not all_ingredients_sufficient:
-                        # 只要有任何一個不夠，直接報錯攔截，什麼都不扣！
                         st.error(f"🚨 {meal_name} 出餐失敗！原料庫存不足：")
                         for msg in insufficient_details:
                             st.write(msg)
                     else:
-                        # 確定通通都夠，才啟動集體扣除
                         st.info(f"庫存檢查通過！開始製作 {meal_name}...")
-                        
                         for item_name, qty in ingredients.items():
                             update_sheet_stock(
                                 product_name=item_name,
@@ -1199,6 +1236,5 @@ with tab5:
                                 action='OUT',
                                 detail_info=f"POS出餐：{meal_name}"
                             )
-                        
                         st.success(f"✅ {meal_name} 出餐成功！已依 FIFO 扣除原料。")
                         st.balloons()
