@@ -989,76 +989,75 @@ with tab3:
 # TAB4 紀錄
 # =========================================================
 
+# =========================================================
+# TAB4 (歷史紀錄與報表匯出)
+# =========================================================
 with tab4:
-
     st.header("🕒 最新紀錄")
 
     try:
-
         doc = connect_spreadsheet()
-
         dfs = []
-
         mapping = {
             '進貨紀錄': '📦 進貨',
             '出庫紀錄': '📤 出庫',
             '報廢紀錄': '🗑️ 報廢'
         }
 
+        # 1. 讀取並整合所有紀錄分頁
         for sheet_name, action_name in mapping.items():
-
             try:
+                # 這裡改用我們寫好的快取，速度更快且防 API 爆炸
+                data = fetch_sheet_data_cached(sheet_name)
+                if data:
+                    df = pd.DataFrame(data)
+                    if not df.empty:
+                        # 標註這個紀錄的動作類型
+                        df['動作'] = action_name
+                        dfs.append(df)
+            except Exception as sheet_err:
+                # 個別分頁讀取失敗時跳過，不影響整個網頁
+                continue
 
-                df = pd.DataFrame(
-                    doc.worksheet(sheet_name).get_all_records()
-                )
-
-                # ✅ 修改後的寫法：先去把資料抓下來，並取名叫 df_all
-                st.markdown("---")
-                st.subheader("📥 倉儲資料匯出")
-                
-                # 利用我們寫好的快取函式，瞬間把「工作表1」的資料抓下來轉成 DataFrame
-                df_all = pd.DataFrame(fetch_sheet_data_cached('工作表1'))
-                
-                # 確認資料庫不是空的，才顯示下載按鈕
-                if not df_all.empty:
-                    # 加上 utf-8-sig 確保 Excel 打開不會是亂碼
-                    csv = df_all.to_csv(index=False).encode('utf-8-sig')
-                    
-                    st.download_button(
-                        label="下載最新庫存總表 (CSV檔)",
-                        data=csv,
-                        file_name=f"餐廳_庫存總表_{datetime.now().strftime('%Y%m%d')}.csv",
-                        mime="text/csv",
-                    )
-                else:
-                    st.info("目前資料庫中還沒有資料可以匯出喔！")
-
+        # 2. 顯示動態紀錄牆
         if dfs:
+            df_all_records = pd.concat(dfs)
 
-            df_all = pd.concat(dfs)
-
-            df_all['日期'] = pd.to_datetime(
-                df_all['日期'],
-                errors='coerce'
-            )
-
-            df_all = df_all.sort_values(
-                by='日期',
-                ascending=False
-            )
+            # 確保有日期欄位可以排序，若欄位名稱不同請依試算表修改（例如 '時間' 或 '最後更新時間'）
+            time_col = '日期' if '日期' in df_all_records.columns else ('最後更新時間' if '最後更新時間' in df_all_records.columns else None)
+            
+            if time_col:
+                df_all_records[time_col] = pd.to_datetime(df_all_records[time_col], errors='coerce')
+                df_all_records = df_all_records.sort_values(by=time_col, ascending=False)
 
             st.dataframe(
-                df_all.head(20),
+                df_all_records.head(20),
                 use_container_width=True
             )
-
         else:
-            st.info("尚無資料")
+            st.info("尚無歷史紀錄")
+
+        # 3. 📥 倉儲資料匯出區塊（獨立放在迴圈外面，最下方）
+        st.markdown("---")
+        st.subheader("📥 倉儲資料匯出")
+        
+        # 利用快取函式撈取庫存總表
+        df_stock_download = pd.DataFrame(fetch_sheet_data_cached('工作表1'))
+        
+        if not df_stock_download.empty:
+            csv = df_stock_download.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(
+                label="下載最新庫存總表 (CSV檔)",
+                data=csv,
+                file_name=f"餐廳_庫存總表_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        else:
+            st.info("目前庫存資料庫中還沒有資料可以匯出喔！")
 
     except Exception as e:
-        st.error(e)
-
+        st.error(f"紀錄分頁載入失敗：{e}")
 # =========================================================
 # TAB5 (POS 出餐與自動扣料)
 # =========================================================
