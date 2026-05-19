@@ -88,7 +88,7 @@ def show_kpi_dashboard():
         doc.worksheet('報廢紀錄').get_all_records()
     )
 
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = datetime.当前()。strftime('%Y-%m-%d')
 
     today_in = 0
     today_waste = 0
@@ -110,7 +110,7 @@ def show_kpi_dashboard():
     low_stock = 0
     expiry_count = 0
 
-    for _, row 在 df_stock.iterrows():
+    for _, row in df_stock.iterrows():
 
         stock = extract_number(
             row.get('庫存數量', 0)
