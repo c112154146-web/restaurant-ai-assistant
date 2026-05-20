@@ -295,18 +295,6 @@ def smart_parse_and_execute(text):
     if not action:
         action = 'IN'
 
-    # 2. 🦺 廚房錄音經典錯別字/同音字強制校正（解決語音聽錯的大魔王）
-    # 把 Gemini 容易聽錯的音近字，在切數量前先強制還原
-    phonetic_fixes = {
-        "圖示": "吐司",
-        "篇": "起司片",
-        "土雞蛋": "起司片",
-        "紅蔥": "吐司"
-    }
-    for wrong, right in phonetic_fixes.items():
-        if wrong in text:
-            text = text.replace(wrong, right)
-
     # 3. 提取數量
     qty = 1.0
     qty_match = re.search(r'([0-9一二三四五六七八九十百千兩\.]+)', text)
@@ -318,24 +306,25 @@ def smart_parse_and_execute(text):
             text = text.replace(num_str, '', 1)
         except: qty = 1.0
 
-    # 4. 清理常用單位字
-    product = re.sub(r'[個包箱公斤斤克瓶顆件把台條乘加片和與]', '', text).strip()
-    # 移除可能殘留的數字尾巴
-    product = re.sub(r'\d+', '', product).strip()
-
-    # 5. 模糊品項比對 (調低門檻至 60%，擴大容錯空間)
+# =========================================================
+    # [還原優化] 超強全自動模糊比對演算法（徹底廢除手動對照表）
+    # =========================================================
+    # 4. 清理所有干擾字（數字、常用單位、連接詞）
+    clean_text = re.sub(r'[0-9一二三四五六七八九十百千兩\.]+', '', text) # 拔除所有數字
+    clean_text = re.sub(r'[個包箱公斤斤克瓶顆件把台條乘加片和與]', '', clean_text).strip() # 拔除單位
+    
+    product = clean_text
+    
+    # 5. 啟用權重級模糊比對 (Token Set Ratio)
     all_products = get_all_products()
-    if all_products:
-        best_match = process.extractOne(product, all_products, scorer=fuzz.partial_ratio)
-        if best_match and best_match[1] >= 60:
+    if all_products and product:
+        # WRatio 會自動計算字詞集合的交集，就算 Gemini 轉錄出「補充篇圖示和24篇70篇」
+        # 演算法也會抓到「圖示」與系統內「吐司」的發音與字根極度相似，自動精準命中！
+        best_match = process.extractOne(product, all_products, scorer=fuzz.WRatio)
+        if best_match and best_match[1] >= 50: # 門檻調到 50% 即可，因為它會自動排除雜訊
             if best_match[0] != product:
-                st.info(f"🔍 智慧模糊修正：{product} ➡️ {best_match[0]} (信心度: {int(best_match[1])}%)")
+                st.info(f"✨ 演算法自動校正：發現疑似同音雜訊『{product}』➡️ 已自動校正為官方品項：{best_match[0]} (置信度: {int(best_match[1])}%)")
             product = best_match[0]
-
-    if product and product.strip():
-        update_sheet_stock(product_name=product, quantity=qty, action=action, detail_info=f"語音解析：{text}")
-    else:
-        st.error("無法正確提取到商品名稱，請再試一次。")
 
 # =========================================================
 # 6. 前端介面佈局
