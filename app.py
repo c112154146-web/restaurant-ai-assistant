@@ -373,11 +373,10 @@ def undo_last_transaction():
 import time  # 確保檔案最上方有 import time
 
 def smart_parse_and_execute(text):
-    st.info(f"🧠 正在委託 Gemini 進行語意大腦分析：{text}")
+    st.info(f"AI processing: {text}")
     
     all_products = get_all_products()
     
-    # 建立純半形、防錯位的安全 Prompt 結構
     prompt = f"""
     You are the core NLP parser for a restaurant stock system.
     Your mission is to parse the human voice text into a structured JSON command.
@@ -385,22 +384,21 @@ def smart_parse_and_execute(text):
     Valid product list in system:
     {', '.join(all_products)}
     
-    Your Tasks & Rules:
-    1. Determine the 'action':
+    Your Tasks and Rules:
+    1. Determine the action:
        - 'IN' (for stock in, inventory, buying, adding items)
        - 'OUT' (for using, selling, pos checkout)
        - 'WASTE' (for broken, expired, wasted food)
-       - CRITICAL RULE: If the input text contains NO explicit verbs and only contains a list of ingredients and numbers/units (e.g., red onion 50 lbs, eggs 70 pcs), it means the employee is doing a rapid stock-in count under kitchen noise. In this case, you MUST force set action to 'IN'.
+       - CRITICAL RULE: If the input text contains NO explicit verbs and only contains a list of ingredients and numbers or units, it means the employee is doing a rapid stock-in count under kitchen noise. In this case, you MUST force set action to 'IN'.
        
     2. Extract 'product': Match with the Valid product list above to find the closest official name. If no match in the list, keep the original extracted name.
-    3. Extract 'quantity': Must be a pure number (int or float). Convert Chinese numbers (like fifty, two) into normal digits. If no quantity mentioned, default to 1.0.
+    3. Extract 'quantity': Must be a pure number. Convert Chinese numbers into normal digits. If no quantity mentioned, default to 1.0.
     
-    Output ONLY a raw JSON object, NO markdown tags (like ```json), NO explanations.
+    Output ONLY a raw JSON object, NO markdown tags, NO explanations.
     Example format:
-    {{"action": "IN", "product": "吐司", "quantity": 50.0}}
+    {{"action": "IN", "product": "product_name", "quantity": 10.0}}
     """
     
-    # 🔄 整合 429 流量防禦鎖與自動倒數重試機制
     import time
     for attempt in range(3):
         try:
@@ -414,64 +412,27 @@ def smart_parse_and_execute(text):
             ai_product = data.get("product")
             ai_quantity = float(data.get("quantity", 1))
             
-            st.success(f"🤖 AI 解析成功 ➡️ 動作：{ai_action} | 品項：{ai_product} | 數量：{ai_quantity}")
+            st.success(f"AI Success -> Action: {ai_action} | Product: {ai_product} | Qty: {ai_quantity}")
             
             update_sheet_stock(
                 product_name=ai_product,
                 quantity=ai_quantity,
                 action=ai_action,
-                detail_info=f"語音智慧助理：{text}"
+                detail_info=f"Voice Assistant: {text}"
             )
-            break  # 成功執行，完美跳出重試迴圈
+            break
             
         except Exception as e:
             if "429" in str(e) or "Quota exceeded" in str(e):
-                # 免費額度鎖卡防禦，自動啟動前端倒數計時
                 with st.empty():
                     for seconds in range(24, 0, -1):
-                        st.warning(f"⏳ [API 流量防禦鎖啟動] 免費額度冷卻中，請稍候 {seconds} 秒後系統將自動重新嘗試...")
+                        st.warning(f"⏳ API Cool down, retrying in {seconds} seconds...")
                         time.sleep(1)
-                    st.info("🔄 正在重新發送請求...")
-                continue  # 時間到，自動進入下一次 attempt 重試
+                    st.info("Retrying...")
+                continue
             else:
-                st.error(f"AI 語意解析失敗：{e}")
+                st.error(f"AI Error: {e}")
                 break
-    你的任務:
-    1. 判斷動作(action):
-       - 'IN' (進貨/補貨/買了/入庫)
-       - 'OUT' (出庫/使用/消耗/出餐/賣了)
-       - 'WASTE' (報廢/壞掉/過期/爛掉)
-         廚房特設防呆規則:如果這句話裡面「全沒有提到任何明確的動詞」，只有單純一連串的食材名稱、亂碼或模糊數量（例如：「紅蔥 50磅 土雞蛋 70片」），這 100% 代表環境雜音大，且員工正在快速盲打或宣讀進貨盤點清單！請【無條件強制判定為 'IN' (進貨)】。
-       
-    2. 提取商品名稱(product)：請與官方商品清單比對，找出最吻合的商品名稱。如果清單內沒有，則保留原本提取的名字。
-    3. 提取數量(quantity)：必須是純數字(int 或 float)。如果對方說中文數字（如五、兩、十），請幫我換算成阿拉伯數字。如果只講名字沒講數量，預設為 1.0。
-    
-    請絕對只輸出一個標準的 JSON 物件，不要任何 markdown 標籤，不要多做解釋。
-    格式範例：
-    {{"action": "IN", "product": "吐司", "quantity": 50.0}}
-    """
-    try:
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        response = model.generate_content([prompt, text])
-        
-        clean_json_text = response.text.strip().replace("```json", "").replace("```", "")
-        data = json.loads(clean_json_text)
-        
-        ai_action = data.get("action")
-        ai_product = data.get("product")
-        ai_quantity = float(data.get("quantity", 1))
-        
-        st.success(f"🤖 AI 解析成功 ➡️ 動作：{ai_action} | 品項：{ai_product} | 數量：{ai_quantity}")
-        
-        update_sheet_stock(
-            product_name=ai_product,
-            quantity=ai_quantity,
-            action=ai_action,
-            detail_info=f"語音智慧助理：{text}"
-        )
-    except Exception as e:
-        st.error(f"AI 語意解析失敗：{e}")
-
 # =========================================================
 # 6. 前端介面與分頁佈局
 # =========================================================
