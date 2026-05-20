@@ -123,7 +123,7 @@ def show_kpi_dashboard():
 
                 days = (
                     pd.to_datetime(expiry)
-                    - datetime.当前()
+                    - datetime.now()
                 ).days
 
                 if days <= 3:
@@ -770,7 +770,7 @@ with tab1:
 
             report = []
 
-            today = datetime.当前()
+            today = datetime.now()
 
             for _, row in df_stock.iterrows():
 
