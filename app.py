@@ -274,17 +274,16 @@ def undo_last_transaction():
 # 5. ⭐ 經典常規關鍵字解析演算法 (Regex & 繁體中文優化)
 # =========================================================
 def smart_parse_and_execute(text):
-    st.info(f"🧠 正在委託 Gemini 進行複合式語意分析：{text}")
+    st.info(f"AI processing: {text}")
     
     all_products = get_all_products()
     
-    # 指派 Gemini 進行多筆訂單的拆解與同音字融合比對
-   # 建立【方案 B】動態提示詞，賦予 AI 無中生有的建檔能力
+    # 🌟 換回最嚴謹的「硬限制」提示詞，100% 防止髒資料污染 Google Sheets
     prompt = f"""
-    You are the core NLP parser for a restaurant stock system.
+    You are the strict NLP parser for a restaurant stock system.
     Your mission is to parse the human voice text into a structured JSON command.
     
-    Valid product list currently in system:
+    [CRITICAL] Official Valid Product List:
     {', '.join(all_products)}
     
     Your Tasks and Rules:
@@ -292,17 +291,18 @@ def smart_parse_and_execute(text):
        - 'IN' (for stock in, inventory, buying, adding items)
        - 'OUT' (for using, selling, pos checkout)
        - 'WASTE' (for broken, expired, wasted food)
-       - CRITICAL RULE: If the input text contains NO explicit verbs and only contains a list of ingredients and numbers or units, it means the employee is doing a rapid stock-in count under kitchen noise. In this case, you MUST force set action to 'IN'.
+       - RULE: If the input text contains NO explicit verbs and only contains a list of ingredients and numbers/units, force set action to 'IN'.
        
-    2. Extract and Match 'product':
-       - Look closely at the input text. If the extracted ingredient name exists or sounds extremely similar to an item in the "Valid product list" above, apply fuzzy matching and force correct it to the official name (e.g., '圖示' -> '吐司', '篇/片' -> '起司片').
-       - 🌟 NEW DYNAMIC RULE: If the extracted product name is completely unrelated to anything in the list, but the action is explicitly 'IN' (e.g., "進貨培根50片" while '培根' is NOT in the list), this means the restaurant is introducing a BRAND NEW ingredient. In this case, DO NOT guess or hallucinate an old product. Keep the raw extracted name (e.g., "培根") and let the system create it automatically!
+    2. Extract and Strictly Match 'product':
+       - You MUST match the extracted ingredient name with the "[CRITICAL] Official Valid Product List" above.
+       - Use your NLP intelligence to find the closest official name by sound or spelling (e.g., '圖示' -> '吐司', '補充50篇' -> '起司片').
+       - 🚨 STRICT CONSTRAINT: If the extracted item is NOT in the official list and doesn't sound like any of them (e.g., "和牛" or "培根" when they are not in the list), DO NOT invent or create a new product. In this case, you MUST return the product name as an empty string "" to trigger a system error.
        
     3. Extract 'quantity': Must be a pure number. Convert Chinese numbers into normal digits. If no quantity mentioned, default to 1.0.
     
     Output ONLY a raw JSON object, NO markdown tags, NO explanations.
     Example format:
-    {{"action": "IN", "product": "新食材名稱", "quantity": 10.0}}
+    {{"action": "IN", "product": "吐司", "quantity": 50.0}}
     """
     
     import time
@@ -311,43 +311,38 @@ def smart_parse_and_execute(text):
             model = genai.GenerativeModel('gemini-2.5-flash')
             response = model.generate_content([prompt, text])
             
-            # 清理 Markdown 標籤並解析為 Python List
-            clean_json = response.text.strip().replace("```json", "").replace("```", "")
-            commands = json.loads(clean_json)
+            clean_json_text = response.text.strip().replace("```json", "").replace("```", "")
+            data = json.loads(clean_json_text)
             
-            if isinstance(commands, list) and len(commands) > 0:
-                st.success(f"🤖 AI 成功拆解出 {len(commands)} 筆實體操作指令：")
+            ai_action = data.get("action")
+            ai_product = data.get("product")
+            ai_quantity = float(data.get("quantity", 1))
+            
+            # 🚨 安全性檢查：如果 AI 判定是全新物料（回傳空字串），拒絕寫入資料庫
+            if not ai_product or ai_product.strip() == "":
+                st.error("🚨 語音輸入失敗：此食材尚未在系統後台建檔！請店長先至『Tab 5 💰 原料成本管理』登記新食材與進貨成本。")
+                break
                 
-                # 遍歷陣列，一筆一筆自動執行進出貨
-                for cmd in commands:
-                    ai_action = cmd.get("action", "IN")
-                    ai_product = cmd.get("product")
-                    ai_quantity = float(cmd.get("quantity", 1))
-                    
-                    st.markdown(f"➡️ **動作**: `{ai_action}` | **品項**: `{ai_product}` | **數量**: `{ai_quantity}`")
-                    
-                    update_sheet_stock(
-                        product_name=ai_product,
-                        quantity=ai_quantity,
-                        action=ai_action,
-                        detail_info=f"AI 複合語音助理：{text}"
-                    )
-                st.balloons()
-            else:
-                st.warning("AI 未能拆解出有效的操作指令組合。")
+            st.success(f"AI Success -> Action: {ai_action} | Product: {ai_product} | Qty: {ai_quantity}")
+            
+            update_sheet_stock(
+                product_name=ai_product,
+                quantity=ai_quantity,
+                action=ai_action,
+                detail_info=f"Voice Assistant: {text}"
+            )
             break
             
         except Exception as e:
             if "429" in str(e) or "Quota exceeded" in str(e):
                 with st.empty():
                     for seconds in range(24, 0, -1):
-                        st.warning(f"⏳ [流量防禦鎖] 額度冷卻中，{seconds} 秒後自動重新嘗試...")
+                        st.warning(f"⏳ API Cool down, retrying in {seconds} seconds...")
                         time.sleep(1)
                 continue
             else:
-                st.error(f"複合語意解析失敗: {e}")
+                st.error(f"AI Error: {e}")
                 break
-
 # =========================================================
 # 6. 前端介面佈局
 # =========================================================
