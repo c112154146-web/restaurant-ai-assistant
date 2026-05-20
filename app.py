@@ -355,8 +355,10 @@ def smart_parse_and_execute(text):
 # =========================================================
 st.title("📦 AI 智慧倉儲系統")
 
-if st.session_state.last_transaction:
-    st.info(f"💡 上一筆更動：【{st.session_state.last_transaction['action']}】 {st.session_state.last_transaction['product']} {st.session_state.last_transaction['quantity']} 個")
+# ✅ 安全防護寫法（即便沒初始化，也會回傳 None 而不當機）
+if st.session_state.get("last_transaction") is not None:
+    last = st.session_state["last_transaction"]
+    st.info(f"💡 上一筆更動：【{last['action']}】 {last['product']} {last['quantity']} 個")
     if st.button("↩️ 點我一鍵撤回還原庫存", type="primary", use_container_width=True):
         undo_last_transaction()
 
