@@ -100,26 +100,63 @@ def show_kpi_dashboard():
 
     low_stock = 0
     expiry_count = 0
+    
+    # 建立用來存放大力告急商品的清單
+    low_stock_list = []
+    expiry_list = []
 
     for _, row in df_stock.iterrows():
+        product = row.get('商品名稱', '')
         stock = extract_number(row.get('庫存數量', 0))
+        unit = extract_unit(str(row.get('庫存數量', '')))
+
+        # 統計低庫存
         if stock <= SAFE_STOCK_LEVEL:
             low_stock += 1
+            low_stock_list.append(f"🚨 【{product}】庫存吃緊！目前僅剩 {stock} {unit} (安全水位: {SAFE_STOCK_LEVEL})")
 
+        # 統計即期品
         expiry = str(row.get('有效期限', '')).strip()
-        if expiry:
+        if expiry and stock > 0:
             try:
                 days = (pd.to_datetime(expiry) - datetime.now()).days
                 if days <= 3:
                     expiry_count += 1
+                    if days <= 1:
+                        expiry_list.append((days, f"🔴 【{product}】明天到期！剩餘庫存：{stock} {unit} (效期: {expiry})"))
+                    else:
+                        expiry_list.append((days, f"🟡 【{product}】即將到期（剩 {days} 天）！剩餘庫存：{stock} {unit} (效期: {expiry})"))
             except:
                 pass
 
+    # 依照到期天數排序，最急的排最上面
+    expiry_list.sort(key=lambda x: x[0])
+
+    # 1. 畫出第一層：4 個 KPI 數據大方塊
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("📦 今日進貨", today_in)
     col2.metric("🗑️ 今日報廢", today_waste)
     col3.metric("⚠️ 即期商品", expiry_count)
     col4.metric("🚨 低庫存", low_stock)
+
+    # 2. 畫出第二層：專屬下拉式警報面板 (直接連動上方數據)
+    exp_col1, exp_col2 = st.columns(2)
+    
+    with exp_col1:
+        if expiry_count > 0:
+            with st.expander(f"🔍 點擊查看 {expiry_count} 筆即期商品詳細清單", expanded=False):
+                for _, msg in expiry_list:
+                    st.markdown(msg)
+        else:
+            st.caption("🟢 目前無即期商品")
+
+    with exp_col2:
+        if low_stock > 0:
+            with st.expander(f"🔍 點擊查看 {low_stock} 筆低庫存詳細清單", expanded=False):
+                for msg in low_stock_list:
+                    st.markdown(msg)
+        else:
+            st.caption("🟢 目前庫存皆在安全水位")
 
 def ai_chat_mode():
     st.subheader("🤖 AI 倉儲助理")
@@ -354,35 +391,6 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 with tab1:
     if st.button("🧠 產出 AI 採購建議"):
         ai_purchase_suggestion()
-        
-    st.markdown("---")
-    st.subheader("🚨 即期品紅綠燈預警")
-    try:
-        doc = connect_spreadsheet()
-        df_stock = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
-        
-        if not df_stock.empty:
-            has_alert = False
-            for _, row in df_stock.iterrows():
-                product = row.get('商品名稱', '')
-                expiry = str(row.get('有效期限', '')).strip()
-                stock_qty = extract_number(row.get('庫存數量', 0))
-                
-                if expiry and stock_qty > 0:
-                    try:
-                        days = (pd.to_datetime(expiry) - datetime.now()).days
-                        if days <= 1:
-                            st.error(f"🔴 【{product}】明天到期！剩餘庫存：{row.get('庫存數量')}")
-                            has_alert = True
-                        elif days <= 3:
-                            st.warning(f"🟡 【{product}】即將到期（剩 {days} 天）！剩餘庫存：{row.get('庫存數量')}")
-                            has_alert = True
-                    except:
-                        pass
-            if not has_alert:
-                st.success("🟢 目前倉庫內無即期商品，食材狀況良好！")
-    except Exception as e:
-        st.error(f"預警系統載入失敗：{e}")
         
     st.markdown("---")
     ai_chat_mode()
