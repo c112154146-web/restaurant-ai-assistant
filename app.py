@@ -277,7 +277,8 @@ def smart_parse_and_execute(text):
     text = text.strip()
     action = None
 
-    in_kw = ['進貨', '新增', '補貨', '入庫', '買了']
+    # 1. 動作關鍵字判斷
+    in_kw = ['進貨', '新增', '補貨', '入庫', '買了', '補充']
     out_kw = ['使用', '用了', '消耗', '出餐', '銷貨', '賣出', '賣了', '扣掉']
     waste_kw = ['報廢', '壞掉', '過期', '爛掉', '丟掉', '破掉']
 
@@ -290,11 +291,23 @@ def smart_parse_and_execute(text):
         for k in waste_kw:
             if k in text: action = 'WASTE'; text = text.replace(k, '', 1); break
 
-    # 💡 廚房防呆核心規則：完全沒有提到明確動詞，100% 預設為進貨行為
+    # 廚房防呆核心規則：完全沒有提到明確動詞，100% 預設為進貨行為
     if not action:
         action = 'IN'
 
-    # 提取數量
+    # 2. 🦺 廚房錄音經典錯別字/同音字強制校正（解決語音聽錯的大魔王）
+    # 把 Gemini 容易聽錯的音近字，在切數量前先強制還原
+    phonetic_fixes = {
+        "圖示": "吐司",
+        "篇": "起司片",
+        "土雞蛋": "起司片",
+        "紅蔥": "吐司"
+    }
+    for wrong, right in phonetic_fixes.items():
+        if wrong in text:
+            text = text.replace(wrong, right)
+
+    # 3. 提取數量
     qty = 1.0
     qty_match = re.search(r'([0-9一二三四五六七八九十百千兩\.]+)', text)
     if qty_match:
@@ -305,19 +318,21 @@ def smart_parse_and_execute(text):
             text = text.replace(num_str, '', 1)
         except: qty = 1.0
 
-    # 清理常用單位
-    product = re.sub(r'[個包箱公斤斤克瓶顆件把台條乘加片]', '', text).strip()
-    
-    # 模糊品項比對
+    # 4. 清理常用單位字
+    product = re.sub(r'[個包箱公斤斤克瓶顆件把台條乘加片和與]', '', text).strip()
+    # 移除可能殘留的數字尾巴
+    product = re.sub(r'\d+', '', product).strip()
+
+    # 5. 模糊品項比對 (調低門檻至 60%，擴大容錯空間)
     all_products = get_all_products()
     if all_products:
         best_match = process.extractOne(product, all_products, scorer=fuzz.partial_ratio)
-        if best_match and best_match[1] >= 75:
+        if best_match and best_match[1] >= 60:
             if best_match[0] != product:
-                st.info(f"🔍 智慧模糊修正：{product} ➡️ {best_match[0]}")
+                st.info(f"🔍 智慧模糊修正：{product} ➡️ {best_match[0]} (信心度: {int(best_match[1])}%)")
             product = best_match[0]
 
-    if product:
+    if product and product.strip():
         update_sheet_stock(product_name=product, quantity=qty, action=action, detail_info=f"語音解析：{text}")
     else:
         st.error("無法正確提取到商品名稱，請再試一次。")
