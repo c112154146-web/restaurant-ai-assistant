@@ -66,11 +66,16 @@ if "last_processed_audio" not in st.session_state:
 # 2. Google Sheets 連線
 # =========================================================
 @st.cache_resource
+# ✅ 正確的安全連線版本
+@st.cache_resource
 def connect_spreadsheet():
     creds_dict = json.loads(st.secrets["gcp_service_account"]["credentials"])
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    return gspread.authorize(creds)
+    client = gspread.authorize(creds)
+    
+    # 🌟 核心關鍵：必須完完整整地 return 這行，doc 才有辦法讀取工作表！
+    return client.open('智慧庫存系統')
     
 @st.cache_data(ttl=60)
 def fetch_sheet_data_cached(sheet_name):
