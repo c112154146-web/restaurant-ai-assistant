@@ -373,34 +373,34 @@ def undo_last_transaction():
 import time  # 確保檔案最上方有 import time
 
 def smart_parse_and_execute(text):
-    st.info(f"🧠 正在委託 Gemini 進行語意大腦分析: {text}")
+    st.info(f"🧠 正在委託 Gemini 進行語意大腦分析：{text}")
     
     all_products = get_all_products()
     
-    # 建立 100% 安全編碼的 Prompt，移除所有可能引發錯位之全形引號
+    # 建立純半形、防錯位的安全 Prompt 結構
     prompt = f"""
-    You are the core NLP parser for a restaurant stock system. 
+    You are the core NLP parser for a restaurant stock system.
     Your mission is to parse the human voice text into a structured JSON command.
     
-    Valid product list:
+    Valid product list in system:
     {', '.join(all_products)}
     
-    Rules:
+    Your Tasks & Rules:
     1. Determine the 'action':
        - 'IN' (for stock in, inventory, buying, adding items)
        - 'OUT' (for using, selling, pos checkout)
        - 'WASTE' (for broken, expired, wasted food)
-       - CRITICAL RULE: If the text contains NO explicit verbs and only contains a list of ingredients and quantities (e.g., red onion 50 lbs, eggs 70 pcs), it means the employee is doing a rapid stock-in count under kitchen noise. In this case, you MUST force set action to 'IN'.
+       - CRITICAL RULE: If the input text contains NO explicit verbs and only contains a list of ingredients and numbers/units (e.g., red onion 50 lbs, eggs 70 pcs), it means the employee is doing a rapid stock-in count under kitchen noise. In this case, you MUST force set action to 'IN'.
        
-    2. Extract 'product': Match with the Valid product list above to find the closest official name. If no match, keep the original name.
-    3. Extract 'quantity': Must be a pure number. Convert Chinese numbers (like fifty, two) into normal digits. If no quantity mentioned, default to 1.0.
+    2. Extract 'product': Match with the Valid product list above to find the closest official name. If no match in the list, keep the original extracted name.
+    3. Extract 'quantity': Must be a pure number (int or float). Convert Chinese numbers (like fifty, two) into normal digits. If no quantity mentioned, default to 1.0.
     
-    Output ONLY a raw JSON object, NO markdown tags, NO explanations.
+    Output ONLY a raw JSON object, NO markdown tags (like ```json), NO explanations.
     Example format:
     {{"action": "IN", "product": "吐司", "quantity": 50.0}}
     """
     
-    # 🔄 [第二階段 AI 強化] 整合 429 流量自動重試冷卻防禦鎖
+    # 🔄 整合 429 流量防禦鎖與自動倒數重試機制
     import time
     for attempt in range(3):
         try:
@@ -414,29 +414,28 @@ def smart_parse_and_execute(text):
             ai_product = data.get("product")
             ai_quantity = float(data.get("quantity", 1))
             
-            st.success(f"🤖 AI 解析成功 ➡️ 動作: {ai_action} | 品項: {ai_product} | 數量: {ai_quantity}")
+            st.success(f"🤖 AI 解析成功 ➡️ 動作：{ai_action} | 品項：{ai_product} | 數量：{ai_quantity}")
             
             update_sheet_stock(
                 product_name=ai_product,
                 quantity=ai_quantity,
                 action=ai_action,
-                detail_info=f"語音智慧助理: {text}"
+                detail_info=f"語音智慧助理：{text}"
             )
-            break # 成功執行，完美跳出
+            break  # 成功執行，完美跳出重試迴圈
             
         except Exception as e:
             if "429" in str(e) or "Quota exceeded" in str(e):
-                # 遇到 429 流量紅牌，啟動高階倒數計時冷卻
+                # 免費額度鎖卡防禦，自動啟動前端倒數計時
                 with st.empty():
                     for seconds in range(24, 0, -1):
                         st.warning(f"⏳ [API 流量防禦鎖啟動] 免費額度冷卻中，請稍候 {seconds} 秒後系統將自動重新嘗試...")
                         time.sleep(1)
                     st.info("🔄 正在重新發送請求...")
-                continue # 時間到，自動進行下一次重試
+                continue  # 時間到，自動進入下一次 attempt 重試
             else:
-                st.error(f"AI 語意解析失敗: {e}")
+                st.error(f"AI 語意解析失敗：{e}")
                 break
-    
     你的任務:
     1. 判斷動作(action):
        - 'IN' (進貨/補貨/買了/入庫)
