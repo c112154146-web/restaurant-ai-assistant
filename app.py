@@ -25,6 +25,9 @@ genai.configure(
 )
 
 SAFE_STOCK_LEVEL = 5
+# 餐廳財務資料庫 (可依需求調整)
+INGREDIENT_COSTS = {"漢堡麵包": 15.0, "牛肉串": 45.0, "高麗菜": 20.0, "吐司": 5.0, "雞蛋": 7.0, "火腿": 12.0, "蛋餅皮": 10.0, "起司片": 8.0}
+MEAL_PRICES = {"🍔 經典牛肉漢堡": 120, "🥪 總匯三明治": 85, "🍳 起司蛋餅": 55}
 
 # =========================================================
 # 1. 初始化選單食譜狀態（動態餐廳食譜暫存）
@@ -275,63 +278,50 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
 # 5. AI 自然語言指令解析
 # =========================================================
 def smart_parse_and_execute(text):
-    text = text.strip()
-    action = None
-
-    in_kw = ['進貨', '新增', '補貨', '入庫', '買了']
-    out_kw = ['使用', '用了', '消耗', '出餐', '銷貨', '賣出', '賣了', '扣掉']
-    waste_kw = ['報廢', '壞掉', '過期', '爛掉', '丟掉', '破掉']
-
-    for k in in_kw:
-        if k in text:
-            action = 'IN'
-            text = text.replace(k, '', 1)
-            break
-
-    if not action:
-        for k in out_kw:
-            if k in text:
-                action = 'OUT'
-                text = text.replace(k, '', 1)
-                break
-
-    if not action:
-        for k in waste_kw:
-            if k in text:
-                action = 'WASTE'
-                text = text.replace(k, '', 1)  # ✅ 已修正：.替换 -> .replace
-                break
-
-    if not action:
-        st.error("找不到動作")
-        return
-
-    qty = 1
-    qty_match = re.search(r'([0-9一二三四五六七八九十百千兩]+)', text)
-    if qty_match:
-        num_str = qty_match.group(1)
-        try:
-            if num_str.isdigit():
-                qty = int(num_str)
-            else:
-                qty = cn2an.cn2an(num_str)
-            text = text.replace(num_str, '', 1)
-        except:
-            qty = 1
-
-    product = re.sub(r'[個包箱公斤斤克瓶顆件把台條]', '', text).strip()
+    st.info(f"🧠 正在委託 Gemini 進行語意大腦分析：『{text}』")
+    
     all_products = get_all_products()
-
-    if all_products:
-        best_match = process.extractOne(product, all_products, scorer=fuzz.partial_ratio)
-        if best_match:
-            matched_name, score, _ = best_match
-            if score >= 80:
-                if matched_name != product:
-                    st.info(f"模糊比對：{product} → {matched_name}")
-                product = matched_name
-
-    update_sheet_stock(product_name=product, quantity=qty, action=action)
+    
+    # 建立強大的提示詞，強迫 Gemini 輸出標準 JSON
+    prompt = f"""
+    你現在是餐廳倉儲系統的核心解析器。請將人類說的語音文字，精準拆解為結構化的倉儲指令。
+    
+    目前系統內現有的官方商品品項清單如下：
+    {', '.join(all_products)}
+    
+    你的任務：
+    1. 判斷動作(action)：'IN'(進貨/補貨/買了)、'OUT'(出庫/使用/消耗)、'WASTE'(報廢/壞掉/過期)。
+    2. 提取商品名稱(product)：請與官方商品清單比對，找出最吻合的商品名稱。如果清單內沒有，則保留原本提取的名字。
+    3. 提取數量(quantity)：必須是純數字(int 或 float)。如果對方說中文數字（如五、兩、十），請幫我換算成阿拉伯數字。
+    
+    請絕對只輸出一個標準的 JSON 物件，不要任何 markdown 標籤(如 ```json)，不要多做解釋。
+    格式範例：
+    {{"action": "IN", "product": "高麗菜", "quantity": 5.0}}
+    """
+    
+    try:
+        model = genai.GenerativeModel('gemini-3.5-flash')
+        response = model.generate_content([prompt, text])
+        
+        # 解析 AI 回傳的 JSON
+        clean_json_text = response.text.strip().replace("```json", "").replace("```", "")
+        data = json.loads(clean_json_text)
+        
+        ai_action = data.get("action")
+        ai_product = data.get("product")
+        ai_quantity = float(data.get("quantity", 1))
+        
+        st.success(f"🤖 AI 解析成功 ➡️ 動作：{ai_action} | 品項：{ai_product} | 數量：{ai_quantity}")
+        
+        # 呼叫實體扣帳/進貨函式
+        update_sheet_stock(
+            product_name=ai_product,
+            quantity=ai_quantity,
+            action=ai_action,
+            detail_info=f"語音智慧助理：{text}"
+        )
+    except Exception as e:
+        st.error(f"AI 語意解析失敗，切換回常規輸入：{e}")
 
 # =========================================================
 # 6. 前端介面排版佈局
@@ -352,6 +342,44 @@ with tab1:
     if st.button("🧠 產出 AI 採購建議"):
         ai_purchase_suggestion()
     st.markdown("---")
+    st.subheader("🚨 即期品紅綠燈預警與 AI 智囊團")
+    
+    try:
+        doc = connect_spreadsheet()
+        df_stock = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
+        
+        if not df_stock.empty:
+            alert_items = []
+            for _, row in df_stock.iterrows():
+                product = row.get('商品名稱', '')
+                expiry = str(row.get('有效期限', '')).strip()
+                stock_qty = extract_number(row.get('庫存數量', 0))
+                
+                if expiry and stock_qty > 0:
+                    try:
+                        days = (pd.to_datetime(expiry) - datetime.now()).days
+                        # 根據天數給予不同的視覺警示
+                        if days <= 1:
+                            st.error(f"🔴 【{product}】明天到期！剩餘庫存：{row.get('庫存數量')}")
+                            alert_items.append(f"{product}(剩{row.get('庫存數量')}, 明天過期)")
+                        elif days <= 3:
+                            st.warning(f"🟡 【{product}】即將到期（剩 {days} 天）！剩餘庫存：{row.get('庫存數量')}")
+                            alert_items.append(f"{product}(剩{row.get('庫存數量')}, 剩{days}天過期)")
+                    except:
+                        pass
+            
+            # 如果有即期品，觸發 AI 經營顧問給予促銷建議
+            if alert_items:
+                if st.button("💡 讓 AI 顧問針對即期品生成今日促銷策略"):
+                    model = genai.GenerativeModel('gemini-2.5-flash')
+                    prompt = f"你是頂級餐廳經營顧問。目前店裡有以下即期食材：{', '.join(alert_items)}。請幫老闆設計1-2個清庫存的『今日限定促銷套餐』或促銷話術，語氣請專業且具商業吸引力，用繁體中文條列式回答。"
+                    with st.spinner("AI 顧問正在為您規劃菜單..."):
+                        response = model.generate_content(prompt)
+                        st.info(response.text)
+            else:
+                st.success("🟢 目前倉庫內無即期商品，食材狀況良好！")
+    except Exception as e:
+        st.error(f"預警系統載入失敗：{e}")
     ai_chat_mode()
     
     st.markdown("---")
@@ -623,4 +651,20 @@ with tab5:
                         for item_name, qty in ingredients.items():
                             update_sheet_stock(product_name=item_name, quantity=qty, action='OUT', detail_info=f"POS出餐：{meal_name}")
                         st.success(f"✅ {meal_name} 出餐成功！已依 FIFO 扣除原料。")
+                        # 🧮 財務面：動態計算這份餐點的毛利
+                        price = MEAL_PRICES.get(meal_name, 0)
+                        cost = 0.0
+                        for ing_name, required_qty in ingredients.items():
+                            cost += required_qty * INGREDIENT_COSTS.get(ing_name, 0.0)
+                        
+                        margin = price - cost
+                        margin_rate = (margin / price) * 100 if price > 0 else 0
+                        
+                        st.markdown("---")
+                        st.markdown(f"##### 📈 本筆交易即時財務分析 ({meal_name})")
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("餐點售價", f"${price} 元")
+                        c2.metric("物料成本", f"${round(cost, 1)} 元")
+                        c3.metric("本單毛利", f"${round(margin, 1)} 元")
+                        c4.metric("毛利率", f"{round(margin_rate, 1)}%")
                         st.balloons()
