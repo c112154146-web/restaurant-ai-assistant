@@ -6,8 +6,9 @@ import re
 import uuid
 import cn2an
 import google.generativeai as genai
-import tempfile  
-import os        
+
+import tempfile  # 用來處理暫存錄音檔
+import os        # 用來刪除暫存檔
 
 from datetime import datetime
 from PIL import Image
@@ -25,12 +26,9 @@ genai.configure(
 )
 
 SAFE_STOCK_LEVEL = 5
-# 餐廳財務資料庫 (可依需求調整)
-INGREDIENT_COSTS = {"漢堡麵包": 15.0, "牛肉串": 45.0, "高麗菜": 20.0, "吐司": 5.0, "雞蛋": 7.0, "火腿": 12.0, "蛋餅皮": 10.0, "起司片": 8.0}
-MEAL_PRICES = {"🍔 經典牛肉漢堡": 120, "🥪 總匯三明治": 85, "🍳 起司蛋餅": 55}
 
 # =========================================================
-# 1. 初始化選單食譜狀態（動態餐廳食譜暫存）
+# 1. 初始化動態狀態（餐點食譜、售價、原料成本資料庫）
 # =========================================================
 if "menu_recipes" not in st.session_state:
     st.session_state.menu_recipes = {
@@ -39,8 +37,27 @@ if "menu_recipes" not in st.session_state:
         "🍳 起司蛋餅": {"蛋餅皮": 1.0, "雞蛋": 1.0, "起司片": 1.0}
     }
 
+if "meal_prices" not in st.session_state:
+    st.session_state.meal_prices = {
+        "🍔 經典牛肉漢堡": 120.0,
+        "🥪 總匯三明治": 85.0,
+        "🍳 起司蛋餅": 55.0
+    }
+
+if "ingredient_costs" not in st.session_state:
+    st.session_state.ingredient_costs = {
+        "漢堡麵包": 15.0,
+        "牛肉串": 45.0,
+        "高麗菜": 20.0,
+        "吐司": 5.0,
+        "雞蛋": 7.0,
+        "火腿": 12.0,
+        "蛋餅皮": 10.0,
+        "起司片": 8.0
+    }
+
 # =========================================================
-# 2. Google Sheets 連線與快取
+# 2. Google Sheets 連線與快取機制
 # =========================================================
 @st.cache_resource
 def connect_spreadsheet():
@@ -275,35 +292,32 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
         st.error(f"系統更新失敗：{e}")
 
 # =========================================================
-# 5. AI 自然語言指令解析
+# 5. AI 自然語言指令解析 (Gemini 結構化輸出版本)
 # =========================================================
 def smart_parse_and_execute(text):
     st.info(f"🧠 正在委託 Gemini 進行語意大腦分析：『{text}』")
     
     all_products = get_all_products()
     
-    # 建立強大的提示詞，強迫 Gemini 輸出標準 JSON
     prompt = f"""
-    你現在是餐廳倉儲系統的核心解析器。請將人類說的語音文字，精準拆解為結構化的倉儲指令。
-    
-    目前系統內現有的官方商品品項清單如下：
-    {', '.join(all_products)}
-    
-    你的任務：
-    1. 判斷動作(action)：'IN'(進貨/補貨/買了)、'OUT'(出庫/使用/消耗)、'WASTE'(報廢/壞掉/過期)。
-    2. 提取商品名稱(product)：請與官方商品清單比對，找出最吻合的商品名稱。如果清單內沒有，則保留原本提取的名字。
-    3. 提取數量(quantity)：必須是純數字(int 或 float)。如果對方說中文數字（如五、兩、十），請幫我換算成阿拉伯數字。
-    
-    請絕對只輸出一個標準的 JSON 物件，不要任何 markdown 標籤(如 ```json)，不要多做解釋。
-    格式範例：
-    {{"action": "IN", "product": "高麗菜", "quantity": 5.0}}
-    """
-    
+你現在是餐廳倉儲系統的核心解析器。請將人類說的語音文字，精準拆解為結構化的倉儲指令。
+
+目前系統內現有的官方商品品項清單如下：
+{', '.join(all_products)}
+
+你的任務：
+1. 判斷動作(action)：'IN'(進貨/補貨/買了)、'OUT'(出庫/使用/消耗)、'WASTE'(報廢/壞掉/過期)。
+2. 提取商品名稱(product)：請與官方商品清單比對，找出最吻合的商品名稱。如果清單內沒有，則保留原本提取的名字。
+3. 提取數量(quantity)：必須是純數字(int 或 float)。如果對方說中文數字（如五、兩、十），請幫我換算成阿拉伯數字。
+
+請絕對只輸出一個標準的 JSON 物件，不要任何 markdown 標籤(如 ```json)，不要多做解釋。
+格式範例：
+{{"action": "IN", "product": "高麗菜", "quantity": 5.0}}
+"""
     try:
-        model = genai.GenerativeModel('gemini-3.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content([prompt, text])
         
-        # 解析 AI 回傳的 JSON
         clean_json_text = response.text.strip().replace("```json", "").replace("```", "")
         data = json.loads(clean_json_text)
         
@@ -313,7 +327,6 @@ def smart_parse_and_execute(text):
         
         st.success(f"🤖 AI 解析成功 ➡️ 動作：{ai_action} | 品項：{ai_product} | 數量：{ai_quantity}")
         
-        # 呼叫實體扣帳/進貨函式
         update_sheet_stock(
             product_name=ai_product,
             quantity=ai_quantity,
@@ -341,15 +354,15 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 with tab1:
     if st.button("🧠 產出 AI 採購建議"):
         ai_purchase_suggestion()
+        
     st.markdown("---")
-    st.subheader("🚨 即期品紅綠燈預警與 AI 智囊團")
-    
+    st.subheader("🚨 即期品紅綠燈預警")
     try:
         doc = connect_spreadsheet()
         df_stock = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
         
         if not df_stock.empty:
-            alert_items = []
+            has_alert = False
             for _, row in df_stock.iterrows():
                 product = row.get('商品名稱', '')
                 expiry = str(row.get('有效期限', '')).strip()
@@ -358,28 +371,20 @@ with tab1:
                 if expiry and stock_qty > 0:
                     try:
                         days = (pd.to_datetime(expiry) - datetime.now()).days
-                        # 根據天數給予不同的視覺警示
                         if days <= 1:
                             st.error(f"🔴 【{product}】明天到期！剩餘庫存：{row.get('庫存數量')}")
-                            alert_items.append(f"{product}(剩{row.get('庫存數量')}, 明天過期)")
+                            has_alert = True
                         elif days <= 3:
                             st.warning(f"🟡 【{product}】即將到期（剩 {days} 天）！剩餘庫存：{row.get('庫存數量')}")
-                            alert_items.append(f"{product}(剩{row.get('庫存數量')}, 剩{days}天過期)")
+                            has_alert = True
                     except:
                         pass
-            
-            # 如果有即期品，觸發 AI 經營顧問給予促銷建議
-            if alert_items:
-                if st.button("💡 讓 AI 顧問針對即期品生成今日促銷策略"):
-                    model = genai.GenerativeModel('gemini-2.5-flash')
-                    prompt = f"你是頂級餐廳經營顧問。目前店裡有以下即期食材：{', '.join(alert_items)}。請幫老闆設計1-2個清庫存的『今日限定促銷套餐』或促銷話術，語氣請專業且具商業吸引力，用繁體中文條列式回答。"
-                    with st.spinner("AI 顧問正在為您規劃菜單..."):
-                        response = model.generate_content(prompt)
-                        st.info(response.text)
-            else:
+            if not has_alert:
                 st.success("🟢 目前倉庫內無即期商品，食材狀況良好！")
     except Exception as e:
         st.error(f"預警系統載入失敗：{e}")
+        
+    st.markdown("---")
     ai_chat_mode()
     
     st.markdown("---")
@@ -534,43 +539,51 @@ with tab4:
 
 # --- TAB5 (POS 前台出餐與動態食譜後台) ---
 with tab5:
-    st.header("🍔 POS 前台出餐與動態食譜設定")
+    st.header("🍔 POS 前台出餐與動態後台管理")
     setup_col, pos_col = st.columns([1, 1.2])
     
     with setup_col:
-        st.subheader("⚙️ 菜單後台管理")
-        manage_tab1, manage_tab2 = st.tabs(["➕ 新增餐點", "✏️ 編輯 / 刪除"])
+        st.subheader("⚙️ 系統後台管理中心")
+        manage_tab1, manage_tab2, manage_tab3 = st.tabs(["➕ 新增餐點", "✏️ 編輯/刪除餐點", "💰 原料成本管理"])
         
         raw_ingredients = get_all_products()
         available_ingredients = sorted(list(set(raw_ingredients)))
         available_ingredients = [item for item in available_ingredients if item.strip() != ""]
         
+        # 1. 新增餐點 (含定價)
         with manage_tab1:
             new_meal_name = st.text_input("1. 輸入新餐點名稱", placeholder="例如：培根蛋吐司", key="add_meal_name")
-            selected_ings = st.multiselect("2. 選擇這道餐點會消耗哪些原料", options=available_ingredients, key="add_meal_ings")
+            new_meal_price = st.number_input("2. 設定此餐點販售售價 (元)", min_value=0.0, value=100.0, step=5.0, key="add_meal_price")
+            selected_ings = st.multiselect("3. 選擇這道餐點會消耗哪些原料", options=available_ingredients, key="add_meal_ings")
             
             new_recipe = {}
             if selected_ings:
-                st.markdown("##### 3. 設定原料消耗量：")
+                st.markdown("##### 4. 設定原料消耗量：")
                 for ing in selected_ings:
                     qty = st.number_input(f"每份消耗【{ing}】數量：", min_value=0.01, value=1.0, step=0.1, key=f"add_qty_{ing}")
                     new_recipe[ing] = qty
             
-            if st.button("💾 儲存新餐點配方", use_container_width=True, key="save_new_btn"):
+            if st.button("💾 儲存新餐點配方與售價", use_container_width=True, key="save_new_btn"):
                 if not new_meal_name.strip():
                     st.error("請輸入餐點名稱！")
                 elif not new_recipe:
                     st.error("請至少選擇一種原料並設定數量！")
                 else:
-                    st.session_state.menu_recipes[new_meal_name.strip()] = new_recipe
-                    st.success(f"🎉 成功新增餐點：{new_meal_name}！")
+                    meal_key = new_meal_name.strip()
+                    st.session_state.menu_recipes[meal_key] = new_recipe
+                    st.session_state.meal_prices[meal_key] = float(new_meal_price)
+                    st.success(f"🎉 成功新增餐點：{meal_key}，定價 ${new_meal_price} 元！")
                     st.rerun()
 
+        # 2. 編輯 / 刪除餐點 (含定價修改)
         with manage_tab2:
             if st.session_state.menu_recipes:
                 edit_meal_target = st.selectbox("選擇要管理的餐點", options=list(st.session_state.menu_recipes.keys()), key="edit_meal_select")
                 current_recipe = st.session_state.menu_recipes[edit_meal_target]
-                st.markdown(f"##### ✏️ 更改【{edit_meal_target}】的配方")
+                current_price = st.session_state.meal_prices.get(edit_meal_target, 0.0)
+                
+                st.markdown(f"##### ✏️ 更改【{edit_meal_target}】的設定")
+                edit_meal_price = st.number_input("調整販售售價 (元)", min_value=0.0, value=float(current_price), step=5.0, key=f"edit_price_{edit_meal_target}")
                 
                 safe_options = list(set(available_ingredients + list(current_recipe.keys())))
                 safe_options = sorted([item for item in safe_options if item.strip() != ""])
@@ -586,32 +599,78 @@ with tab5:
                 
                 btn_col1, btn_col2 = st.columns(2)
                 with btn_col1:
-                    if st.button("💾 更新配方", use_container_width=True, type="primary", key="update_recipe_btn"):
+                    if st.button("💾 更新配方與售價", use_container_width=True, type="primary", key="update_recipe_btn"):
                         if not updated_recipe:
                             st.error("配方不能完全沒有原料！")
                         else:
                             st.session_state.menu_recipes[edit_meal_target] = updated_recipe
-                            st.success(f"⚙️ {edit_meal_target} 配方修改成功！")
+                            st.session_state.meal_prices[edit_meal_target] = float(edit_meal_price)
+                            st.success(f"⚙️ {edit_meal_target} 配方與售價修改成功！")
                             st.rerun()
                             
                 with btn_col2:
-                    if st.button("❌ 刪除餐點", use_container_width=True, key="delete_recipe_btn"):
-                        del st.session_state.menu_recipes[edit_meal_target]
+                    if st.button("❌ 刪除此餐點", use_container_width=True, key="delete_recipe_btn"):
+                        if edit_meal_target in st.session_state.menu_recipes:
+                            del st.session_state.menu_recipes[edit_meal_target]
+                        if edit_meal_target in st.session_state.meal_prices:
+                            del st.session_state.meal_prices[edit_meal_target]
                         st.warning(f"🗑️ 已將【{edit_meal_target}】從菜單移除")
                         st.rerun()
             else:
                 st.info("目前菜單內沒有任何自訂餐點。")
 
+        # 3. 動態原料成本管理 (完全可自訂新增、修改、刪除單價)
+        with manage_tab3:
+            st.markdown("##### ✏️ 調整 / 新增原料進貨成本")
+            
+            # 使用下拉選單讓使用者可以選取現有原料，或是自訂輸入新原料
+            cost_mode = st.radio("操作模式", ["修改現有原料單價", "新增未列出原料之單價"], horizontal=True)
+            
+            if cost_mode == "修改現有原料單價":
+                if st.session_state.ingredient_costs:
+                    target_ing = st.selectbox("選擇原料品項", options=list(st.session_state.ingredient_costs.keys()))
+                    current_ing_cost = st.session_state.ingredient_costs[target_ing]
+                    new_ing_cost = st.number_input(f"設定【{target_ing}】單位進貨成本 (元)", min_value=0.0, value=float(current_ing_cost), step=1.0)
+                    
+                    c_btn1, c_btn2 = st.columns(2)
+                    with c_btn1:
+                        if st.button("💾 儲存單價修改", use_container_width=True, type="primary"):
+                            st.session_state.ingredient_costs[target_ing] = float(new_ing_cost)
+                            st.success(f"✅ 已將 【{target_ing}】 的單位成本更新為 ${new_ing_cost} 元！")
+                            st.rerun()
+                    with c_btn2:
+                        if st.button("🗑️ 刪除此原料成本紀錄", use_container_width=True):
+                            del st.session_state.ingredient_costs[target_ing]
+                            st.warning(f"🗑️ 已刪除 【{target_ing}】 的成本單價紀錄。")
+                            st.rerun()
+                else:
+                    st.info("目前成本資料庫是空的。")
+            else:
+                custom_ing_name = st.text_input("輸入新原料名稱 (例: 培根)", placeholder="請輸入商品代碼或名稱")
+                custom_ing_cost = st.number_input("設定單位進貨成本 (元)", min_value=0.0, value=10.0, step=1.0)
+                if st.button("➕ 新增此原料成本單價", use_container_width=True):
+                    if not custom_ing_name.strip():
+                        st.error("請填寫原料名稱！")
+                    else:
+                        st.session_state.ingredient_costs[custom_ing_name.strip()] = float(custom_ing_cost)
+                        st.success(f"🎉 成功登記新物料：{custom_ing_name.strip()} 成本為 ${custom_ing_cost} 元！")
+                        st.rerun()
+            
+            st.markdown("---")
+            st.caption("📋 當前原料進貨成本價目表清單：")
+            st.json(st.session_state.ingredient_costs)
+
     with pos_col:
         st.subheader("🛒 前台一鍵出餐 (自動連動 FIFO)")
-        st.write("點擊餐點按鈕，系統會自動拆解食譜並扣除庫存：")
+        st.write("點擊餐點按鈕，系統會自動拆解食譜、核算即時毛利並扣除庫存：")
         st.markdown("---")
         
         current_menu = st.session_state.menu_recipes
         grid_cols = st.columns(2)
         for idx, (meal_name, ingredients) in enumerate(current_menu.items()):
             with grid_cols[idx % 2]:
-                st.markdown(f"**{meal_name}**")
+                meal_price_show = st.session_state.meal_prices.get(meal_name, 0.0)
+                st.markdown(f"**{meal_name}** — 💰售價: `${meal_price_show}` 元")
                 recipe_text = " / ".join([f"{k}:{v}" for k, v in ingredients.items()])
                 st.caption(f"配方：{recipe_text}")
                 
@@ -650,15 +709,17 @@ with tab5:
                         st.info(f"庫存檢查通過！開始製作 {meal_name}...")
                         for item_name, qty in ingredients.items():
                             update_sheet_stock(product_name=item_name, quantity=qty, action='OUT', detail_info=f"POS出餐：{meal_name}")
-                        st.success(f"✅ {meal_name} 出餐成功！已依 FIFO 扣除原料。")
-                        # 🧮 財務面：動態計算這份餐點的毛利
-                        price = MEAL_PRICES.get(meal_name, 0)
+                        
+                        # 🧮 財務面：動態計算這份餐點的即時利潤與成本
+                        price = st.session_state.meal_prices.get(meal_name, 0.0)
                         cost = 0.0
                         for ing_name, required_qty in ingredients.items():
-                            cost += required_qty * INGREDIENT_COSTS.get(ing_name, 0.0)
+                            cost += required_qty * st.session_state.ingredient_costs.get(ing_name, 0.0)
                         
                         margin = price - cost
                         margin_rate = (margin / price) * 100 if price > 0 else 0
+                        
+                        st.success(f"✅ {meal_name} 出餐成功！已依 FIFO 扣除原料。")
                         
                         st.markdown("---")
                         st.markdown(f"##### 📈 本筆交易即時財務分析 ({meal_name})")
