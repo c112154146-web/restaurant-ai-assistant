@@ -370,16 +370,58 @@ def undo_last_transaction():
 # =========================================================
 # 5. AI 自然語言指令解析 (Gemini 智慧防呆優化版)
 # =========================================================
+import time  # 確保檔案最上方有 import time
+
 def smart_parse_and_execute(text):
     st.info(f"🧠 正在委託 Gemini 進行語意大腦分析：『{text}』")
-    
     all_products = get_all_products()
     
     prompt = f"""
     你現在是餐廳倉儲系統的核心解析器。請將人類說的語音文字，精準拆解為結構化的倉儲指令。
+    目前系統內現有的官方商品品項清單如下：{', '.join(all_products)}
     
-    目前系統內現有的官方商品品項清單如下：
-    {', '.join(all_products)}
+    你的任務：
+    1. 判斷動作(action)：'IN', 'OUT', 'WASTE'。若無明確動詞僅有名詞清單與數量，強制判定為 'IN'。
+    2. 提取商品名稱(product)與數量(quantity)。
+    請絕對只輸出一個標準的 JSON 物件，不要任何 markdown 標籤。
+    格式範例：{{"action": "IN", "product": "吐司", "quantity": 50.0}}
+    """
+    
+    # 🔄 加入自動重試與冷卻防禦鎖
+    for attempt in range(3):
+        try:
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            response = model.generate_content([prompt, text])
+            
+            clean_json_text = response.text.strip().replace("```json", "").replace("```", "")
+            data = json.loads(clean_json_text)
+            
+            ai_action = data.get("action")
+            ai_product = data.get("product")
+            ai_quantity = float(data.get("quantity", 1))
+            
+            st.success(f"🤖 AI 解析成功 ➡️ 動作：{ai_action} | 品項：{ai_product} | 數量：{ai_quantity}")
+            
+            update_sheet_stock(
+                product_name=ai_product,
+                quantity=ai_quantity,
+                action=ai_action,
+                detail_info=f"語音智慧助理：{text}"
+            )
+            break # 成功執行，跳出重試迴圈
+            
+        except Exception as e:
+            if "429" in str(e) or "Quota exceeded" in str(e):
+                # 偵測到 429 流量超限，啟動倒數計時冷卻
+                with st.empty():
+                    for seconds in range(24, 0, -1):
+                        st.warning(f"⏳ [API 流量防禦鎖啟動] 免費額度冷卻中，請稍候 {seconds} 秒後系統將自動重試...")
+                        time.sleep(1)
+                    st.info("🔄 正在重新發送請求...")
+                continue # 時間到，進入下一次重試
+            else:
+                st.error(f"AI 語意解析失敗：{e}")
+                break
     
     你的任務：
     1. 判斷動作(action)：
