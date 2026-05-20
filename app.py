@@ -550,16 +550,22 @@ with tab2:
             except Exception as e: st.error(e)
 
 # --- TAB3 (AI 語音助理頁面) ---
+# --- TAB3 (AI 語音助理頁面 - 結束錄音即自動執行) ---
 with tab3:
     st.header("🎙️ AI 語音助理")
-    audio_file = st.audio_input("錄音")
-    if audio_file:
-        if st.button("開始分析語音"):
-            try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                    tmp.write(audio_file.getvalue())
-                    tmp_path = tmp.name
+    st.write("💡 提示：錄音完成並按下停止後，系統大腦將會自動執行解析，無需點擊任何按鈕。")
+    
+    audio_file = st.audio_input("錄音控制台")
 
+    # ⚡ 移除 st.button，只要 audio_file 有檔案進來，直接放行自動運算
+    if audio_file:
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                tmp.write(audio_file.getvalue())
+                tmp_path = tmp.name
+
+            # 建立 Streamlit 提示框，讓使用者知道系統正在自動處理
+            with st.spinner("🎵 錄音已安全接收，AI 正自動分析語音中，請稍候..."):
                 audio_upload = genai.upload_file(path=tmp_path)
                 model = genai.GenerativeModel('gemini-2.5-flash')
                 all_products = get_all_products()
@@ -567,12 +573,17 @@ with tab3:
                 
                 response = model.generate_content([audio_upload, prompt])
                 spoken = response.text.strip()
-                st.success(f"辨識結果：{spoken}")
                 
+                st.success(f"🎙️ 自動辨識結果：{spoken}")
+                
+                # 呼叫已經排毒且具備 429 防禦鎖的 AI 解析器
                 smart_parse_and_execute(spoken)
-                os.remove(tmp_path)
-            except Exception as e: st.error(e)
-
+                
+            # 刪除暫存檔
+            os.remove(tmp_path)
+            
+        except Exception as e:
+            st.error(f"語音自動處理失敗: {e}")
 # --- TAB4 (歷史紀錄與報表匯出頁面) ---
 with tab4:
     st.header("🕒 最新紀錄")
