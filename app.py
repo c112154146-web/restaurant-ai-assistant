@@ -279,24 +279,30 @@ def smart_parse_and_execute(text):
     all_products = get_all_products()
     
     # 指派 Gemini 進行多筆訂單的拆解與同音字融合比對
+   # 建立【方案 B】動態提示詞，賦予 AI 無中生有的建檔能力
     prompt = f"""
-    You are the core parser for a restaurant stock system.
-    The user just spoke a sentence that may contain MULTIPLE stock items and quantities, possibly with severe typos/noise (e.g., '圖示' means '吐司', '篇/片' means '起司片', '土雞蛋' means '起司片').
+    You are the core NLP parser for a restaurant stock system.
+    Your mission is to parse the human voice text into a structured JSON command.
     
-    Official Valid Product List:
+    Valid product list currently in system:
     {', '.join(all_products)}
     
-    Your Tasks:
-    1. Identify all products mentioned and match them with the Official Valid Product List. Correct any sound-alike homophones based on context (e.g., fifty '圖示' -> '吐司': 50, twenty-four '篇' -> '起司片': 24).
-    2. Determine action for each item: 'IN' (buy/stock-in), 'OUT' (use/sell), 'WASTE' (spoil). If no clear verb, default to 'IN'.
-    3. Extract pure numeric quantity for each product.
+    Your Tasks and Rules:
+    1. Determine the action:
+       - 'IN' (for stock in, inventory, buying, adding items)
+       - 'OUT' (for using, selling, pos checkout)
+       - 'WASTE' (for broken, expired, wasted food)
+       - CRITICAL RULE: If the input text contains NO explicit verbs and only contains a list of ingredients and numbers or units, it means the employee is doing a rapid stock-in count under kitchen noise. In this case, you MUST force set action to 'IN'.
+       
+    2. Extract and Match 'product':
+       - Look closely at the input text. If the extracted ingredient name exists or sounds extremely similar to an item in the "Valid product list" above, apply fuzzy matching and force correct it to the official name (e.g., '圖示' -> '吐司', '篇/片' -> '起司片').
+       - 🌟 NEW DYNAMIC RULE: If the extracted product name is completely unrelated to anything in the list, but the action is explicitly 'IN' (e.g., "進貨培根50片" while '培根' is NOT in the list), this means the restaurant is introducing a BRAND NEW ingredient. In this case, DO NOT guess or hallucinate an old product. Keep the raw extracted name (e.g., "培根") and let the system create it automatically!
+       
+    3. Extract 'quantity': Must be a pure number. Convert Chinese numbers into normal digits. If no quantity mentioned, default to 1.0.
     
-    Output ONLY a valid JSON array of objects, NO markdown tags, NO explanations.
-    Example output format:
-    [
-      {{"action": "IN", "product": "吐司", "quantity": 50.0}},
-      {{"action": "IN", "product": "起司片", "quantity": 24.0}}
-    ]
+    Output ONLY a raw JSON object, NO markdown tags, NO explanations.
+    Example format:
+    {{"action": "IN", "product": "新食材名稱", "quantity": 10.0}}
     """
     
     import time
