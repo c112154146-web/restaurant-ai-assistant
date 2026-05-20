@@ -423,7 +423,7 @@ def smart_parse_and_execute(text):
                 st.error(f"AI 語意解析失敗：{e}")
                 break
     
-    你的任務：
+    你的任務:
     1. 判斷動作(action)：
        - 'IN' (進貨/補貨/買了/入庫)
        - 'OUT' (出庫/使用/消耗/出餐/賣了)
