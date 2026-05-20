@@ -281,75 +281,73 @@ def undo_last_transaction():
 # 5. ⭐ 經典常規關鍵字解析演算法 (Regex & 繁體中文優化)
 # =========================================================
 def smart_parse_and_execute(text):
-    st.info(f"AI processing: {text}")
+    st.info(f"🧠 語意大腦正在自動過濾環境噪聲與口誤...")
     
     all_products = get_all_products()
     
-    # 🌟 換回最嚴謹的「硬限制」提示詞，100% 防止髒資料污染 Google Sheets
-    prompt = f"""
-    You are the strict NLP parser for a restaurant stock system.
-    Your mission is to parse the human voice text into a structured JSON command.
+    # 🌟 第一層大腦：利用 Gemini 強大的上下文糾錯能力，把爛字「純化」成標準黃金口訣
+    nlp_prompt = f"""
+    You are a voice command cleanser for a kitchen. 
+    The input text comes from a noisy kitchen and may contain severe typos, sound-alike words, or user corrections (e.g., "請胡" means "進貨", "不對是45" means the user corrected the quantity to 45).
     
-    [CRITICAL] Official Valid Product List:
+    Valid product list:
     {', '.join(all_products)}
     
-    Your Tasks and Rules:
-    1. Determine the action:
-       - 'IN' (for stock in, inventory, buying, adding items)
-       - 'OUT' (for using, selling, pos checkout)
-       - 'WASTE' (for broken, expired, wasted food)
-       - RULE: If the input text contains NO explicit verbs and only contains a list of ingredients and numbers/units, force set action to 'IN'.
-       
-    2. Extract and Strictly Match 'product':
-       - You MUST match the extracted ingredient name with the "[CRITICAL] Official Valid Product List" above.
-       - Use your NLP intelligence to find the closest official name by sound or spelling (e.g., '圖示' -> '吐司', '補充50篇' -> '起司片').
-       - 🚨 STRICT CONSTRAINT: If the extracted item is NOT in the official list and doesn't sound like any of them (e.g., "和牛" or "培根" when they are not in the list), DO NOT invent or create a new product. In this case, you MUST return the product name as an empty string "" to trigger a system error.
-       
-    3. Extract 'quantity': Must be a pure number. Convert Chinese numbers into normal digits. If no quantity mentioned, default to 1.0.
+    Your mission:
+    1. Identify the core intent action: '進貨', '出庫', or '報廢'. (If not clear, default to '進貨').
+    2. Identify the product name. It MUST be matched and corrected to the closest item in the "Valid product list" (例如: 聽到"卡拉雞腿排不對是" -> 修正為 "卡拉雞腿排").
+    3. Identify the final corrected numeric quantity (例如: "25塊不對是45塊" -> 最終數量是 45).
     
-    Output ONLY a raw JSON object, NO markdown tags, NO explanations.
-    Example format:
-    {{"action": "IN", "product": "吐司", "quantity": 50.0}}
+    Output ONLY the cleaned standard command in this exact format: [動作] [商品名稱] [最終純數字]
+    Do NOT output markdown, quotes, or any explanations.
+    
+    Example input: "請胡 卡拉雞腿排25塊 不對，是45塊"
+    Example output: 進貨 卡拉雞腿排 45
     """
     
     import time
+    cleaned_command = ""
     for attempt in range(3):
         try:
             model = genai.GenerativeModel('gemini-2.5-flash')
-            response = model.generate_content([prompt, text])
-            
-            clean_json_text = response.text.strip().replace("```json", "").replace("```", "")
-            data = json.loads(clean_json_text)
-            
-            ai_action = data.get("action")
-            ai_product = data.get("product")
-            ai_quantity = float(data.get("quantity", 1))
-            
-            # 🚨 安全性檢查：如果 AI 判定是全新物料（回傳空字串），拒絕寫入資料庫
-            if not ai_product or ai_product.strip() == "":
-                st.error("🚨 語音輸入失敗：此食材尚未在系統後台建檔！請店長先至『Tab 5 💰 原料成本管理』登記新食材與進貨成本。")
-                break
-                
-            st.success(f"AI Success -> Action: {ai_action} | Product: {ai_product} | Qty: {ai_quantity}")
-            
-            update_sheet_stock(
-                product_name=ai_product,
-                quantity=ai_quantity,
-                action=ai_action,
-                detail_info=f"Voice Assistant: {text}"
-            )
+            response = model.generate_content([nlp_prompt, text])
+            cleaned_command = response.text.strip()
             break
-            
         except Exception as e:
-            if "429" in str(e) or "Quota exceeded" in str(e):
-                with st.empty():
-                    for seconds in range(24, 0, -1):
-                        st.warning(f"⏳ API Cool down, retrying in {seconds} seconds...")
-                        time.sleep(1)
-                continue
+            if "429" in str(e): time.sleep(2); continue
+            else: st.error(f"AI 降噪失敗: {e}"); return
+
+    if cleaned_command:
+        st.success(f"✨ 語意大腦過濾成功 ➡️ 精準還原指令：『{cleaned_command}』")
+        
+        # 🚀 第二層：由最聽話的常規 Regex 對這串「極度乾淨」的黃金口訣進行精準切割與寫入
+        action = None
+        if '進貨' in cleaned_command: action = 'IN'
+        elif '出庫' in cleaned_command: action = 'OUT'
+        elif '報廢' in cleaned_command: action = 'WASTE'
+        else: action = 'IN'
+        
+        # 拆解品項與數量
+        try:
+            parts = cleaned_command.split()
+            if len(parts) >= 3:
+                product_name = parts[1]
+                quantity = float(parts[2])
+                
+                # 安全內控防護：如果經過雙層過濾後，商品依然不在清單內，才進行攔截
+                if product_name not in all_products:
+                    st.error(f"🚨 語音輸入失敗：食材【{product_name}】尚未在後台建檔！請先至 Tab 5 登記。")
+                else:
+                    update_sheet_stock(
+                        product_name=product_name,
+                        quantity=quantity,
+                        action=action,
+                        detail_info=f"雙層語意助理: {text}"
+                    )
             else:
-                st.error(f"AI Error: {e}")
-                break
+                st.error("系統大腦分析後發現語意結構不完整，請重新宣讀。")
+        except Exception as parse_err:
+            st.error(f"指令實體解碼失敗: {parse_err}")
 # =========================================================
 # 6. 前端介面佈局
 # =========================================================
