@@ -274,57 +274,73 @@ def undo_last_transaction():
 # 5. ⭐ 經典常規關鍵字解析演算法 (Regex & 繁體中文優化)
 # =========================================================
 def smart_parse_and_execute(text):
-    text = text.strip()
-    action = None
-
-    # 1. 動作關鍵字判斷
-    in_kw = ['進貨', '新增', '補貨', '入庫', '買了', '補充']
-    out_kw = ['使用', '用了', '消耗', '出餐', '銷貨', '賣出', '賣了', '扣掉']
-    waste_kw = ['報廢', '壞掉', '過期', '爛掉', '丟掉', '破掉']
-
-    for k in in_kw:
-        if k in text: action = 'IN'; text = text.replace(k, '', 1); break
-    if not action:
-        for k in out_kw:
-            if k in text: action = 'OUT'; text = text.replace(k, '', 1); break
-    if not action:
-        for k in waste_kw:
-            if k in text: action = 'WASTE'; text = text.replace(k, '', 1); break
-
-    # 廚房防呆核心規則：完全沒有提到明確動詞，100% 預設為進貨行為
-    if not action:
-        action = 'IN'
-
-    # 3. 提取數量
-    qty = 1.0
-    qty_match = re.search(r'([0-9一二三四五六七八九十百千兩\.]+)', text)
-    if qty_match:
-        num_str = qty_match.group(1)
-        try:
-            if num_str.replace('.', '', 1).isdigit(): qty = float(num_str)
-            else: qty = float(cn2an.cn2an(num_str))
-            text = text.replace(num_str, '', 1)
-        except: qty = 1.0
-
-# =========================================================
-    # [還原優化] 超強全自動模糊比對演算法（徹底廢除手動對照表）
-    # =========================================================
-    # 4. 清理所有干擾字（數字、常用單位、連接詞）
-    clean_text = re.sub(r'[0-9一二三四五六七八九十百千兩\.]+', '', text) # 拔除所有數字
-    clean_text = re.sub(r'[個包箱公斤斤克瓶顆件把台條乘加片和與]', '', clean_text).strip() # 拔除單位
+    st.info(f"🧠 正在委託 Gemini 進行複合式語意分析：{text}")
     
-    product = clean_text
-    
-    # 5. 啟用權重級模糊比對 (Token Set Ratio)
     all_products = get_all_products()
-    if all_products and product:
-        # WRatio 會自動計算字詞集合的交集，就算 Gemini 轉錄出「補充篇圖示和24篇70篇」
-        # 演算法也會抓到「圖示」與系統內「吐司」的發音與字根極度相似，自動精準命中！
-        best_match = process.extractOne(product, all_products, scorer=fuzz.WRatio)
-        if best_match and best_match[1] >= 50: # 門檻調到 50% 即可，因為它會自動排除雜訊
-            if best_match[0] != product:
-                st.info(f"✨ 演算法自動校正：發現疑似同音雜訊『{product}』➡️ 已自動校正為官方品項：{best_match[0]} (置信度: {int(best_match[1])}%)")
-            product = best_match[0]
+    
+    # 指派 Gemini 進行多筆訂單的拆解與同音字融合比對
+    prompt = f"""
+    You are the core parser for a restaurant stock system.
+    The user just spoke a sentence that may contain MULTIPLE stock items and quantities, possibly with severe typos/noise (e.g., '圖示' means '吐司', '篇/片' means '起司片', '土雞蛋' means '起司片').
+    
+    Official Valid Product List:
+    {', '.join(all_products)}
+    
+    Your Tasks:
+    1. Identify all products mentioned and match them with the Official Valid Product List. Correct any sound-alike homophones based on context (e.g., fifty '圖示' -> '吐司': 50, twenty-four '篇' -> '起司片': 24).
+    2. Determine action for each item: 'IN' (buy/stock-in), 'OUT' (use/sell), 'WASTE' (spoil). If no clear verb, default to 'IN'.
+    3. Extract pure numeric quantity for each product.
+    
+    Output ONLY a valid JSON array of objects, NO markdown tags, NO explanations.
+    Example output format:
+    [
+      {{"action": "IN", "product": "吐司", "quantity": 50.0}},
+      {{"action": "IN", "product": "起司片", "quantity": 24.0}}
+    ]
+    """
+    
+    import time
+    for attempt in range(3):
+        try:
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            response = model.generate_content([prompt, text])
+            
+            # 清理 Markdown 標籤並解析為 Python List
+            clean_json = response.text.strip().replace("```json", "").replace("```", "")
+            commands = json.loads(clean_json)
+            
+            if isinstance(commands, list) and len(commands) > 0:
+                st.success(f"🤖 AI 成功拆解出 {len(commands)} 筆實體操作指令：")
+                
+                # 遍歷陣列，一筆一筆自動執行進出貨
+                for cmd in commands:
+                    ai_action = cmd.get("action", "IN")
+                    ai_product = cmd.get("product")
+                    ai_quantity = float(cmd.get("quantity", 1))
+                    
+                    st.markdown(f"➡️ **動作**: `{ai_action}` | **品項**: `{ai_product}` | **數量**: `{ai_quantity}`")
+                    
+                    update_sheet_stock(
+                        product_name=ai_product,
+                        quantity=ai_quantity,
+                        action=ai_action,
+                        detail_info=f"AI 複合語音助理：{text}"
+                    )
+                st.balloons()
+            else:
+                st.warning("AI 未能拆解出有效的操作指令組合。")
+            break
+            
+        except Exception as e:
+            if "429" in str(e) or "Quota exceeded" in str(e):
+                with st.empty():
+                    for seconds in range(24, 0, -1):
+                        st.warning(f"⏳ [流量防禦鎖] 額度冷卻中，{seconds} 秒後自動重新嘗試...")
+                        time.sleep(1)
+                continue
+            else:
+                st.error(f"複合語意解析失敗: {e}")
+                break
 
 # =========================================================
 # 6. 前端介面佈局
@@ -414,8 +430,8 @@ with tab3:
                     model = genai.GenerativeModel('gemini-2.5-flash')
                     all_products = get_all_products()
                     # 💡 這邊只讓 Gemini 單純做語音轉文字（STT），絕不進行任何邏輯腦補與擴充！
-                    prompt = f"你現在是語音轉文字機器。請將這段錄音原封不動地轉錄為繁體中文，修正錯別字。商品可能包含：{','.join(all_products)}。絕對不要自己加上額外的商品提示或說明，只輸出轉錄後的最終純文字。"
-                    
+                    # 確保 with tab3: 裡的 prompt 只有這一行，讓 Gemini 單純錄音轉文字：
+                    prompt = "請將這段錄音原封不動地轉錄為繁體中文，修正明顯發音錯字即可。絕對不要自己加上額外的商品提示、說明或備註，只輸出轉錄後的最終純文字句子。"                    
                     response = model.generate_content([audio_upload, prompt])
                     spoken_text = response.text.strip()
                 
