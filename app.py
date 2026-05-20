@@ -327,23 +327,29 @@ def smart_parse_and_execute(text):
         elif '報廢' in cleaned_command: action = 'WASTE'
         else: action = 'IN'
         
-        # 拆解品項與數量
+# 拆解品項與數量
         try:
             parts = cleaned_command.split()
             if len(parts) >= 3:
-                product_name = parts[1]
+                product_name = parts[1].strip()  # 🌟 修正：自動清除前後多餘的空格
                 quantity = float(parts[2])
                 
-                # 安全內控防護：如果經過雙層過濾後，商品依然不在清單內，才進行攔截
-                if product_name not in all_products:
-                    st.error(f"🚨 語音輸入失敗：食材【{product_name}】尚未在後台建檔！請先至 Tab 5 登記。")
-                else:
+                # 🌟 升級：守門員不再死板，改用模糊比對去試算表撈最接近的現成品項！
+                from rapidfuzz import process, fuzz
+                best_match = process.extractOne(product_name, all_products, scorer=fuzz.ratio)
+                
+                # 只要相似度高於 80% (例如卡拉雞腿排 vs 卡拉雞腿排 )，就自動判定為同一個東西！
+                if best_match and best_match[1] >= 80:
+                    product_name = best_match[0]
+                    
                     update_sheet_stock(
                         product_name=product_name,
                         quantity=quantity,
                         action=action,
                         detail_info=f"雙層語意助理: {text}"
                     )
+                else:
+                    st.error(f"🚨 語音輸入失敗：食材【{product_name}】在系統後台完全找不到極度接近的品項！請店長先至 Tab 5 登記新食材與進貨成本。")
             else:
                 st.error("系統大腦分析後發現語意結構不完整，請重新宣讀。")
         except Exception as parse_err:
