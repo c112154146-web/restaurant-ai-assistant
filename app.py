@@ -366,37 +366,173 @@ show_kpi_dashboard()
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 AI 分析", "📸 OCR", "🎙️ 語音", "🕒 紀錄", "🍔 POS出餐"])
 
-# --- TAB1 (AI 分析) ---
+# --- TAB1 (AI 分析 - 3 大 AI 強化功能完美回歸版) ---
 with tab1:
-    if st.button("🧠 產出 AI 採購建議"): ai_purchase_suggestion()
+    st.header("🧠 AI 智慧經營與預測中心")
+    st.write("利用 Google Gemini 2.5 Flash 核心大腦，對餐廳營運數據進行深度機器學習與智囊決策：")
+    
+    # 🌟 滿血回歸：建立三個專業的 AI 功能按鈕
+    ai_col1, ai_col2, ai_col3 = st.columns(3)
+    
+    with ai_col1:
+        run_prediction = st.button("📈 啟動 AI 銷售與需求預測 (未來7天)", use_container_width=True)
+    with ai_col2:
+        run_anomaly = st.button("🔍 執行 AI 倉儲異常行為偵測", use_container_width=True)
+    with ai_col3:
+        run_consultant = st.button("📊 生成 AI 智慧經營決策週報", use_container_width=True)
+
+    # 讀取共用資料庫數據
+    try:
+        doc = connect_spreadsheet()
+        df_stock_raw = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
+        df_in_raw = pd.DataFrame(doc.worksheet('進貨紀錄').get_all_records())
+        df_out_raw = pd.DataFrame(doc.worksheet('出庫紀錄').get_all_records())
+        df_waste_raw = pd.DataFrame(doc.worksheet('報廢紀錄').get_all_records())
+    except Exception as db_err:
+        st.error(f"資料庫讀取失敗：{db_err}")
+        df_stock_raw = pd.DataFrame()
+
+    # =========================================================
+    # 功能一：📈 AI 銷售與需求預測
+    # =========================================================
+    if run_prediction:
+        st.markdown("---")
+        st.subheader("🔮 未来 7 天物料需求預測與自動採購單")
+        if df_out_raw.empty:
+            st.info("目前尚無出庫紀錄，無法進行預測。系統已自動依據現有品項為您模擬基本採購模型：")
+        
+        with st.spinner("AI 正在分析歷史銷售趨勢與耗速模型..."):
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            prompt = f"""
+            你是餐廳供應鏈專家。請依據以下歷史出庫（銷售）紀錄，結合目前的庫存總表，利用機器學習與語意分析思維，預測未來 7 天的需求。
+            
+            目前庫存總表：
+            {df_stock_raw.to_string()}
+            
+            歷史出庫紀錄：
+            {df_out_raw.tail(100).to_string()}
+            
+            請幫我分析並用繁體中文條列輸出：
+            1. 【未來7天需求預測】：預測哪些原物料在未來一週內消耗量最大（估算具體數字）。
+            2. 【建議採購清單】：對比目前庫存，直接列出未來 7 天建議補貨的「商品名稱」與「建議補貨數量」。
+            3. 請用標準 Markdown 表格呈現預測數據，顯得更加專業。
+            """
+            try:
+                response = model.generate_content(prompt)
+                st.markdown(response.text)
+            except Exception as e:
+                st.error(f"預測生成失敗，可能觸發流量限制：{e}")
+
+    # =========================================================
+    # 功能二：🔍 AI 倉儲異常行為偵測
+    # =========================================================
+    if run_anomaly:
+        st.markdown("---")
+        st.subheader("🕵️‍♂️ 系統自動化稽核與異常偵測告警")
+        with st.spinner("安全稽核大腦掃描中，正在偵測異常浪費或數據吻合度..."):
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            prompt = f"""
+            你是餐廳資深防弊與內控審計專家。請仔細比對以下「目前庫存」、「出庫紀錄」與「報廢紀錄」，找出潛在的營運異常點。
+            
+            目前庫存狀態：
+            {df_stock_raw.to_string()}
+            
+            進貨紀錄：
+            {df_in_raw.tail(50).to_string()}
+            
+            報廢紀錄：
+            {df_waste_raw.tail(50).to_string()}
+            
+            請幫我掃描並抓出任何異常（例如：某些高價值食材報廢率高得不合理、庫存扣除速度與進貨週期嚴重脫鉤、是否有疑似偷料或管理疏失的黑洞）。
+            如果數據一切正常，也請給予肯定的安全評估。請用繁體中文條列式回答。
+            """
+            try:
+                response = model.generate_content(prompt)
+                st.warning(response.text)
+            except Exception as e:
+                st.error(f"異常偵測失敗，請稍候再試：{e}")
+
+    # =========================================================
+    # 功能三：📊 生成 AI 智慧經營決策週報
+    # =========================================================
+    if run_consultant:
+        st.markdown("---")
+        st.subheader("🏦 餐廳智慧商務經營決策報告")
+        with st.spinner("正在結算經營毛利結構並撰寫決策週報..."):
+            recipe_summary = str(st.session_state.menu_recipes)
+            price_summary = str(st.session_state.meal_prices)
+            cost_summary = str(st.session_state.ingredient_costs)
+            
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            prompt = f"""
+            你是擁有 MBA 學位的頂級餐飲業財務顧問。請結合以下餐廳的「產品定價」、「原物料成本」、「食譜配方(BOM)」以及「歷史報廢與出庫數據」，為老闆寫一份高階經營診斷週報。
+            
+            餐點食譜(BOM)：{recipe_summary}
+            餐點販售售價：{price_summary}
+            原料進貨成本：{cost_summary}
+            近期出庫紀錄：{df_out_raw.tail(30).to_string()}
+            近期報廢損失：{df_waste_raw.tail(30).to_string()}
+            
+            請從高階管理者的角度出發，提供以下繁體中文分析：
+            1. 【財務診斷】：哪道餐點的利潤結構（毛利率）最高？哪道最低？報廢損失對目前的利潤造成多大的衝擊？
+            2. 【具體經營建議】：老闆下一步應該調整哪道菜的售價？或是該如何優化供應鏈採購成本？
+            語氣請保持絕對專業、嚴謹且具備商業指導價值。
+            """
+            try:
+                response = model.generate_content(prompt)
+                st.info(response.text)
+            except Exception as e:
+                st.error(f"經營報告生成失敗，請檢查 API 狀態：{e}")
+
+    # =========================================================
+    # 基礎分析：常規歷史耗速統計與常規對話聊天室
+    # =========================================================
     st.markdown("---")
     ai_chat_mode()
+    
     st.markdown("---")
-    st.header("📊 歷史趨勢與耗速統計")
-    if st.button("開始分析趨勢"):
+    st.header("📊 常規歷史耗速統計（基礎演算法）")
+    if st.button("開始分析常規趨勢"):
         try:
-            doc = connect_spreadsheet()
-            df_stock = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
-            df_out = pd.DataFrame(doc.worksheet('出庫紀錄').get_all_records())
-            if not df_stock.empty: df_stock['庫存數量'] = df_stock['庫存數量'].apply(extract_number)
-            if not df_out.empty:
-                df_out['數量'] = df_out['數量'].apply(extract_number)
-                df_out['日期'] = pd.to_datetime(df_out['日期'], format='mixed', errors='coerce')
+            if not df_stock_raw.empty:
+                df_stock_copy = df_stock_raw.copy()
+                df_stock_copy['庫存數量'] = df_stock_copy['庫存數量'].apply(extract_number)
+            if not df_out_raw.empty:
+                df_out_copy = df_out_raw.copy()
+                df_out_copy['數量'] = df_out_copy['數量'].apply(extract_number)
+                df_out_copy['日期'] = pd.to_datetime(df_out_copy['日期'], format='mixed', errors='coerce')
+
             report = []
             today = datetime.now()
-            for _, row in df_stock.iterrows():
+
+            for _, row in df_stock_copy.iterrows():
                 product = row['商品名稱']
                 current_stock = row['庫存數量']
-                product_out = df_out[df_out['商品名稱'] == product] if not df_out.empty else pd.DataFrame()
-                burn_rate = product_out['數量'].sum() / max(1, (today - product_out['日期'].min()).days) if not product_out.empty else 0
+                product_out = df_out_copy[df_out_copy['商品名稱'] == product] if not df_out_copy.empty else pd.DataFrame()
+
+                if not product_out.empty:
+                    days = max(1, (today - product_out['日期'].min()).days)
+                    consumed = product_out['數量'].sum()
+                    burn_rate = consumed / days
+                else:
+                    burn_rate = 0
+
                 days_remaining = current_stock / burn_rate if burn_rate > 0 else 999
                 suggestion = "立即補貨" if current_stock <= SAFE_STOCK_LEVEL else ("即將缺貨" if days_remaining <= 3 else "安全")
-                report.append({"商品": product, "庫存": current_stock, "日耗": round(burn_rate, 2), "剩餘天數": int(days_remaining) if days_remaining != 999 else "-", "建議": suggestion})
+
+                report.append({
+                    "商品": product,
+                    "庫存": current_stock,
+                    "日耗": round(burn_rate, 2),
+                    "剩餘天數": int(days_remaining) if days_remaining != 999 else "-",
+                    "建議": suggestion
+                })
+
             df_report = pd.DataFrame(report)
             st.dataframe(df_report, use_container_width=True)
             st.bar_chart(df_report.set_index("商品")[["庫存"]])
-        except Exception as e: st.error(e)
-
+        except Exception as e:
+            st.error(e)
 # --- TAB2 (AI OCR) ---
 with tab2:
     st.header("📸 AI OCR 單據辨識")
