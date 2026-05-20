@@ -331,13 +331,13 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
 # =========================================================
 # 5. AI 自然語言指令解析 (Gemini 結構化輸出版本)
 # =========================================================
+# ✅ 請檢查並修正為這種標準結構（注意最上方的 f""" 和最下方的 """）：
 def smart_parse_and_execute(text):
     st.info(f"🧠 正在委託 Gemini 進行語意大腦分析：『{text}』")
     
     all_products = get_all_products()
     
-    prompt = f"""
-# ✅ 替換為廚房防呆進階 Prompt
+    # ⚠️ 這裡必須是三個雙引號開頭，左邊要跟上面的程式碼對齊
     prompt = f"""
     你現在是餐廳倉儲系統的核心解析器。請將人類說的語音文字，精準拆解為結構化的倉儲指令。
     
@@ -357,7 +357,7 @@ def smart_parse_and_execute(text):
     請絕對只輸出一個標準的 JSON 物件，不要任何 markdown 標籤(如 ```json)，不要多做解釋。
     格式範例：
     {{"action": "IN", "product": "金華火腿", "quantity": 100.0}}
-    """
+    """ # ⚠️ 這裡必須是三個雙引號結尾
     try:
         model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content([prompt, text])
