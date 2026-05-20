@@ -373,21 +373,35 @@ def undo_last_transaction():
 import time  # 確保檔案最上方有 import time
 
 def smart_parse_and_execute(text):
-    st.info(f"🧠 正在委託 Gemini 進行語意大腦分析：『{text}』")
+    st.info(f"🧠 正在委託 Gemini 進行語意大腦分析: {text}")
+    
     all_products = get_all_products()
     
+    # 建立 100% 安全編碼的 Prompt，移除所有可能引發錯位之全形引號
     prompt = f"""
-    你現在是餐廳倉儲系統的核心解析器。請將人類說的語音文字，精準拆解為結構化的倉儲指令。
-    目前系統內現有的官方商品品項清單如下：{', '.join(all_products)}
+    You are the core NLP parser for a restaurant stock system. 
+    Your mission is to parse the human voice text into a structured JSON command.
     
-    你的任務：
-    1. 判斷動作(action)：'IN', 'OUT', 'WASTE'。若無明確動詞僅有名詞清單與數量，強制判定為 'IN'。
-    2. 提取商品名稱(product)與數量(quantity)。
-    請絕對只輸出一個標準的 JSON 物件，不要任何 markdown 標籤。
-    格式範例：{{"action": "IN", "product": "吐司", "quantity": 50.0}}
+    Valid product list:
+    {', '.join(all_products)}
+    
+    Rules:
+    1. Determine the 'action':
+       - 'IN' (for stock in, inventory, buying, adding items)
+       - 'OUT' (for using, selling, pos checkout)
+       - 'WASTE' (for broken, expired, wasted food)
+       - CRITICAL RULE: If the text contains NO explicit verbs and only contains a list of ingredients and quantities (e.g., red onion 50 lbs, eggs 70 pcs), it means the employee is doing a rapid stock-in count under kitchen noise. In this case, you MUST force set action to 'IN'.
+       
+    2. Extract 'product': Match with the Valid product list above to find the closest official name. If no match, keep the original name.
+    3. Extract 'quantity': Must be a pure number. Convert Chinese numbers (like fifty, two) into normal digits. If no quantity mentioned, default to 1.0.
+    
+    Output ONLY a raw JSON object, NO markdown tags, NO explanations.
+    Example format:
+    {{"action": "IN", "product": "吐司", "quantity": 50.0}}
     """
     
-    # 🔄 加入自動重試與冷卻防禦鎖
+    # 🔄 [第二階段 AI 強化] 整合 429 流量自動重試冷卻防禦鎖
+    import time
     for attempt in range(3):
         try:
             model = genai.GenerativeModel('gemini-2.5-flash')
@@ -400,27 +414,27 @@ def smart_parse_and_execute(text):
             ai_product = data.get("product")
             ai_quantity = float(data.get("quantity", 1))
             
-            st.success(f"🤖 AI 解析成功 ➡️ 動作：{ai_action} | 品項：{ai_product} | 數量：{ai_quantity}")
+            st.success(f"🤖 AI 解析成功 ➡️ 動作: {ai_action} | 品項: {ai_product} | 數量: {ai_quantity}")
             
             update_sheet_stock(
                 product_name=ai_product,
                 quantity=ai_quantity,
                 action=ai_action,
-                detail_info=f"語音智慧助理：{text}"
+                detail_info=f"語音智慧助理: {text}"
             )
-            break # 成功執行，跳出重試迴圈
+            break # 成功執行，完美跳出
             
         except Exception as e:
             if "429" in str(e) or "Quota exceeded" in str(e):
-                # 偵測到 429 流量超限，啟動倒數計時冷卻
+                # 遇到 429 流量紅牌，啟動高階倒數計時冷卻
                 with st.empty():
                     for seconds in range(24, 0, -1):
-                        st.warning(f"⏳ [API 流量防禦鎖啟動] 免費額度冷卻中，請稍候 {seconds} 秒後系統將自動重試...")
+                        st.warning(f"⏳ [API 流量防禦鎖啟動] 免費額度冷卻中，請稍候 {seconds} 秒後系統將自動重新嘗試...")
                         time.sleep(1)
                     st.info("🔄 正在重新發送請求...")
-                continue # 時間到，進入下一次重試
+                continue # 時間到，自動進行下一次重試
             else:
-                st.error(f"AI 語意解析失敗：{e}")
+                st.error(f"AI 語意解析失敗: {e}")
                 break
     
     你的任務:
@@ -428,7 +442,7 @@ def smart_parse_and_execute(text):
        - 'IN' (進貨/補貨/買了/入庫)
        - 'OUT' (出庫/使用/消耗/出餐/賣了)
        - 'WASTE' (報廢/壞掉/過期/爛掉)
-         廚房特設防呆規則:如果這句話裡面「完全沒有提到任何明確的動詞」，只有單純一連串的食材名稱、亂碼或模糊數量（例如：「紅蔥 50磅 土雞蛋 70片」），這 100% 代表環境雜音大，且員工正在快速盲打或宣讀進貨盤點清單！請【無條件強制判定為 'IN' (進貨)】。
+         廚房特設防呆規則:如果這句話裡面「全沒有提到任何明確的動詞」，只有單純一連串的食材名稱、亂碼或模糊數量（例如：「紅蔥 50磅 土雞蛋 70片」），這 100% 代表環境雜音大，且員工正在快速盲打或宣讀進貨盤點清單！請【無條件強制判定為 'IN' (進貨)】。
        
     2. 提取商品名稱(product)：請與官方商品清單比對，找出最吻合的商品名稱。如果清單內沒有，則保留原本提取的名字。
     3. 提取數量(quantity)：必須是純數字(int 或 float)。如果對方說中文數字（如五、兩、十），請幫我換算成阿拉伯數字。如果只講名字沒講數量，預設為 1.0。
