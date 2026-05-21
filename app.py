@@ -309,6 +309,62 @@ def undo_last_transaction():
     st.session_state.last_transaction = None
     st.cache_data.clear()
     st.rerun()
+def delete_and_undo_specific_record(sheet_name, row_index, product_name, quantity):
+    """
+    精準撤回特定某一筆歷史紀錄，並完美反向修正庫存
+    """
+    try:
+        doc = connect_spreadsheet()
+        
+        # 1. 決定反向修正庫存的動作
+        # 如果本來是進貨，撤回就要變成『出庫(OUT)』扣掉；反之亦然
+        if sheet_name == '進貨紀錄':
+            rollback_action = 'OUT'
+            action_text = "撤回進貨"
+        elif sheet_name in ['出庫紀錄', '報廢紀錄']:
+            rollback_action = 'IN'
+            action_text = "撤回消耗"
+        else:
+            st.error("不支援的撤回工作表類型")
+            return False
+
+        # 2. 執行庫存反向修正 (呼叫 process_fifo_outbound 或直接加回)
+        # 這裡為了不破壞既有結構，我們可以直接調用你原本的 update_sheet_stock
+        # 傳入 is_undo=True 防止它又產生新的一筆紀錄，造成無限循環
+        sheet_main = doc.worksheet('工作表1')
+        headers_main = sheet_main.row_values(1)
+        records_main = sheet_main.get_all_records()
+        
+        if rollback_action == 'IN':
+            # 補回庫存：直接在工作表1最底下追加一列該商品的補回批次
+            import datetime
+            new_row = [""] * len(headers_main)
+            if '商品名稱' in headers_main: new_row[headers_main.index('商品名稱')] = product_name
+            if '庫存數量' in headers_main: new_row[headers_main.index('庫存數量')] = float(quantity)
+            if '有效期限' in headers_main: new_row[headers_main.index('有效期限')] = (datetime.date.today() + datetime.timedelta(days=7)).strftime("%Y-%m-%d")
+            if 'ID' in headers_main: new_row[headers_main.index('ID')] = f"UD-{str(uuid.uuid4())[:5]}"
+            sheet_main.append_row(new_row)
+        else:
+            # 扣除庫存：使用先進先出法扣除
+            success, msg, updates = process_fifo_outbound(product_name, float(quantity), sheet_main, headers_main, records_main)
+            if success:
+                sheet_main.batch_update(updates)
+            else:
+                st.error(f"庫存反向扣除失敗（可能庫存已被其他餐點扣光）：{msg}")
+                return False
+
+        # 3. 將該條歷史紀錄從對應的紀錄工作表刪除
+        # 注意：row_index 在 Google Sheets 中是從 1 開始，標題列是 1，資料從 2 開始
+        log_sheet = doc.worksheet(sheet_name)
+        log_sheet.delete_rows(row_index)
+        
+        st.cache_data.clear()
+        st.success(f"🎉 成功同步撤回！已從【{sheet_name}】刪除該紀錄，並完成庫存【{action_text}】修正。")
+        return True
+        
+    except Exception as e:
+        st.error(f"精準撤回失敗：{e}")
+        return False
 
 # =========================================================
 # 5. ⭐ 經典常規關鍵字解析演算法 (Regex & 繁體中文優化)
@@ -630,36 +686,71 @@ with tab3:
                 try: os.remove(tmp_path)
                 except: pass
 
-# --- TAB4 (歷史紀錄) ---
+# --- TAB4 (🕒 紀錄分頁 - 歷史紀錄精準撤回版) ---
 with tab4:
-    st.header("🕒 最新紀錄")
-    try:
-        dfs = []
-        mapping = {'進貨紀錄': '📦 進貨', '出庫紀錄': '📤 出庫', '報廢紀錄': '🗑️ 報廢'}
-        for sheet_name, action_name in mapping.items():
-            try:
-                data_records = fetch_sheet_data_cached(sheet_name)
-                if data_records:
-                    df_single = pd.DataFrame(data_records)
-                    if not df_single.empty:
-                        df_single['動作'] = action_name
-                        dfs.append(df_single)
-            except: continue
-        if dfs:
-            df_history_wall = pd.concat(dfs)
-            time_col = '日期' if '日期' in df_history_wall.columns else ('最後更新時間' if '最後更新時間' in df_history_wall.columns else None)
-            if time_col:
-                df_history_wall[time_col] = pd.to_datetime(df_history_wall[time_col], errors='coerce')
-                df_history_wall = df_history_wall.sort_values(by=time_col, ascending=False)
-            st.dataframe(df_history_wall.head(20), use_container_width=True)
-        else: st.info("尚無歷史紀錄")
-        st.markdown("---")
-        df_stock_final = pd.DataFrame(fetch_sheet_data_cached('工作表1'))
-        if not df_stock_final.empty:
-            csv_data = df_stock_final.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(label="下載最新庫存總表 (CSV檔)", data=csv_data, file_name=f"餐廳_庫存總表_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True)
-    except Exception as e: st.error(f"紀錄分頁載入失敗：{e}")
+    st.header("🕒 歷史變更紀錄與精準審核中心")
+    st.write("以下為系統所有實時進銷存紀錄。管理員可針對特定錯誤登錄進行單點『還原撤回』：")
+    
+    # 選擇要查看與管理的紀錄類型
+    record_type = st.selectbox("請選擇要管理的紀錄看板：", ["📥 進貨明細管理", "📤 出庫明細管理", "🗑️ 報廢明細管理"])
+    
+    target_sheet = ""
+    if "進貨" in record_type: target_sheet = "進貨紀錄"
+    elif "出庫" in record_type: target_sheet = "出庫紀錄"
+    else: target_sheet = "報廢紀錄"
 
+    try:
+        doc = connect_spreadsheet()
+        log_sheet = doc.worksheet(target_sheet)
+        raw_data = log_sheet.get_all_records()
+        
+        if not raw_data:
+            st.info(f"目前【{target_sheet}】尚無任何歷史數據。")
+        else:
+            # 建立漂亮的標題列欄位
+            h_col1, h_col2, h_col3, h_col4, h_col5 = st.columns([2, 2, 1, 3, 1.5])
+            with h_col1: st.markdown("**變更日期**")
+            with h_col2: st.markdown("**商品名稱**")
+            with h_col3: st.markdown("**變更數量**")
+            with h_col4: st.markdown("**備註說明**")
+            with h_col5: st.markdown("**安全性操作**")
+            st.markdown("---")
+            
+            # 從最新的一筆排到最舊的一筆 (反向巡覽)
+            # Google Sheets 的 row_index = 索引值 + 2 (因為有標題列且從1開始算)
+            for idx, row in reversed(list(enumerate(raw_data))):
+                actual_row_in_sheet = idx + 2
+                
+                # 建立每一列的資料欄位
+                r_col1, r_col2, r_col3, r_col4, r_col5 = st.columns([2, 2, 1, 3, 1.5])
+                
+                with r_col1: st.write(row.get("日期", row.get("時間", "-")))
+                with r_col2: st.write(f"**{row.get('商品名稱', '-')}**")
+                with r_col3: st.write(str(row.get("數量", row.get("數量(片/個)", "-"))))
+                with r_col4: st.write(row.get("備註", row.get("備註說明", "一般語音/系統")))
+                
+                with r_col5:
+                    # 幫每一列生成一按鈕，並綁定唯一的 key 防止全網頁按鈕衝突
+                    btn_key = f"undo_{target_sheet}_{actual_row_in_sheet}_{idx}"
+                    if st.button("🗑️ 撤回還原", key=btn_key, type="secondary", use_container_width=True):
+                        p_name = row.get('商品名稱')
+                        qty = row.get('數量', row.get('數量(片/個)', 0))
+                        
+                        with st.spinner("正在執行資料庫連鎖還原..."):
+                            success = delete_and_undo_specific_record(
+                                sheet_name=target_sheet,
+                                row_index=actual_row_in_sheet,
+                                product_name=p_name,
+                                quantity=qty
+                            )
+                            if success:
+                                time.sleep(1)
+                                st.rerun() # 重新整理網頁，讓被刪除的那一列立刻消失！
+                
+                st.markdown("<hr style='margin:2px 0px; opacity:0.3;'>", unsafe_allow_html=True)
+
+    except Exception as log_err:
+        st.error(f"讀取紀錄分頁失敗：{log_err}")
 # --- TAB5 (POS 出餐) ---
 with tab5:
     st.header("🍔 POS 前台出餐與動態後台管理")
