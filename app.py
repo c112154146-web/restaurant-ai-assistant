@@ -457,7 +457,7 @@ if st.session_state.get("last_transaction") is not None:
 
 show_kpi_dashboard()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 AI 分析", "📸 OCR", "🎙️ 語音", "🕒 紀錄", "🍔 POS出餐"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 AI 分析", "📸 單據辨識", "🎙️ 語音", "🕒 紀錄", "🍔 POS出餐"])
 
 # --- TAB1 (AI 分析 - 3 大 AI 強化功能完美回歸版) ---
 with tab1:
