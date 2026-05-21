@@ -230,7 +230,7 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
         records = sheet.get_all_records()
         quantity = float(quantity)
 
-            if action == 'IN':
+         if action == 'IN':
             # =========================================================
             # 🛡️ 智慧自動效期填補機制（解決語音沒說期限的 FIFO 危機）
             # =========================================================
