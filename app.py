@@ -230,14 +230,14 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
         records = sheet.get_all_records()
         quantity = float(quantity)
 
-         if action == 'IN':
+        if action == 'IN':
             # =========================================================
             # 🛡️ 智慧自動效期填補機制（解決語音沒說期限的 FIFO 危機）
             # =========================================================
             import datetime
             today = datetime.date.today()
             
-            # 定義各類食材的標準保鮮天數（可以自由調整）
+            # 定義各類食材的標準保鮮天數
             shelf_life_rules = {
                 "鮮奶": 7, "豆漿": 5,
                 "吐司": 5, "漢堡麵包": 7, "蛋餅皮": 20,
@@ -256,9 +256,26 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
             if '商品名稱' in headers: new_row[headers.index('商品名稱')] = product_name
             if '庫存數量' in headers: new_row[headers.index('庫存數量')] = quantity
             
-            # 🌟 核心防護：如果原本期限是空的，就直接自動塞入算好的安全日期，絕對不留空！
+            # 🌟 核心防護：優先使用傳入的 expiry（例如手動輸入），如果是空的（語音）才自動塞入算好的安全日期
             if '有效期限' in headers: 
-                new_row[headers.index('有效期限')] = calculated_expiry
+                new_row[headers.index('有效期限')] = expiry if expiry else calculated_expiry
+            if '最後更新時間' in headers: 
+                new_row[headers.index('最後更新時間')] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            if 'ID' in headers: 
+                new_row[headers.index('ID')] = str(uuid.uuid4())[:8]
+
+            # 真正寫入雲端試算表
+            sheet.append_row(new_row)
+            log_transaction('進貨紀錄', product_name, quantity, detail_info)
+            
+            if not is_undo:
+                st.success(f"進貨成功：{product_name} +{quantity}")
+                st.session_state.last_transaction = {
+                    "action": "IN", 
+                    "product": product_name, 
+                    "quantity": quantity, 
+                    "expiry": expiry if expiry else calculated_expiry
+                }
                 
         elif action in ['OUT', 'WASTE']:
             success, msg, updates = process_fifo_outbound(product_name, quantity, sheet, headers, records)
