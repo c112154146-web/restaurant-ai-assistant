@@ -246,7 +246,7 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
             import datetime as dt
             today = dt.date.today()
             
-            # 定義各類食材的標準保鮮天數
+            # 定義各類食材的標準保鮮天數 (備用填補機制)
             shelf_life_rules = {
                 "鮮奶": 7, "豆漿": 5, "吐司": 5, "漢堡麵包": 7, "蛋餅皮": 20,
                 "牛肉排": 30, "火腿片": 14, "培根": 14, "卡拉雞腿排": 30, "熱狗": 30, "雞塊": 30,
@@ -255,14 +255,18 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
                 "番茄醬": 90, "美乃滋": 60, "黑胡椒醬": 90, "巧克力醬": 90, "花生醬": 90
             }
             
-            default_days = shelf_life_rules.get(product_name, 7)
-            calculated_expiry = (today + dt.timedelta(days=default_days)).strftime("%Y-%m-%d")
+            # 🚀 修正：如果 expiry 有傳入有效的 YYYY-MM-DD 格式則優先使用；若是 None 或 'None'，才啟動自動填補天數
+            if expiry and expiry != 'None' and re.match(r'^\d{4}-\d{2}-\d{2}$', str(expiry).strip()):
+                final_expiry = str(expiry).strip()
+            else:
+                default_days = shelf_life_rules.get(product_name, 7)
+                final_expiry = (today + dt.timedelta(days=default_days)).strftime("%Y-%m-%d")
             
             new_row = [""] * len(headers)
             if '商品名稱' in headers: new_row[headers.index('商品名稱')] = product_name
             if '庫存數量' in headers: new_row[headers.index('庫存數量')] = quantity
             if '有效期限' in headers: 
-                new_row[headers.index('有效期限')] = expiry if expiry else calculated_expiry
+                new_row[headers.index('有效期限')] = final_expiry
             if '最後更新時間' in headers: 
                 new_row[headers.index('最後更新時間')] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             if 'ID' in headers: 
@@ -272,9 +276,9 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
             log_transaction('進貨紀錄', product_name, quantity, detail_info)
             
             if not is_undo:
-                st.success(f"進貨成功：{product_name} +{quantity}")
+                st.success(f"進貨成功：{product_name} +{quantity} (有效期限: {final_expiry})")
                 st.session_state.last_transaction = {
-                    "action": "IN", "product": product_name, "quantity": quantity, "expiry": expiry if expiry else calculated_expiry
+                    "action": "IN", "product": product_name, "quantity": quantity, "expiry": final_expiry
                 }
                 
         elif action in ['OUT', 'WASTE']:
@@ -356,29 +360,44 @@ def delete_and_undo_specific_record(sheet_name, row_index, product_name, quantit
         return False
 
 # =========================================================
-# 5. ⭐ 雙層大腦語意降噪解析演算法
+# 5. ⭐ 雙層大腦語意降噪解析演算法 (包含智慧日期相對推算)
 # =========================================================
 def smart_parse_and_execute(text):
     st.info(f"🧠 語意大腦正在自動過濾環境噪聲與口誤...")
     all_products = get_all_products()
     
+    # 🌟 核心升級：在 NLP 提示詞中，加入當前日期，並訓練 AI 認得「相對效期」口訣！
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    weekday_str = datetime.now().strftime("%A") # 取得今天是星期幾
+    
     nlp_prompt = f"""
-    You are a voice command cleanser for a kitchen. 
-    The input text comes from a noisy kitchen and may contain severe typos, sound-alike words, or user corrections (e.g., "請胡" means "進貨", "不對是45" means the user corrected the quantity to 45).
+    You are an advanced voice command assistant for a restaurant kitchen storage. 
+    The input text comes from a microphone and may contain speech corrections or environment noise.
+    
+    Current Date Today is: {today_str} ({weekday_str})
 
-    Valid product list:
+    Valid product list in our database:
     {', '.join(all_products)}
 
     Your mission:
-    1. Identify the core intent action: '進貨', '出庫', or '報廢'. (If not clear, default to '進貨').
-    2. Identify the product name. It MUST be matched and corrected to the closest item in the "Valid product list".
+    1. Identify the core action intent: '進貨', '出庫', or '報廢'. (Default to '進貨' if unclear).
+    2. Identify the product name. Correct it to match the closest item in the "Valid product list".
     3. Identify the final corrected numeric quantity.
+    4. 🌟 Smart Expiry Calculation: Look at the text to see if the user mentioned any expiry info (e.g., "5天", "保鮮一週", "禮拜五過期", "下週二過期"). 
+       Based on Today's date ({today_str}), calculate the EXACT target expiry date in YYYY-MM-DD format.
+       - If they say "5天" or "5天過期", add 5 days to today.
+       - If they say "禮拜五過期", calculate the date of the UPCOMING Friday.
+       - If they say "下週二過期", calculate the date of Tuesday next week.
+       - If they do NOT mention any date or expiry info, output 'None'.
 
-    Output ONLY the cleaned standard command in this exact format: [動作] [商品名稱] [最終純數字]
-    Do NOT output markdown, quotes, or any explanations.
+    Output ONLY the cleaned standard command in this exact format: [動作] [商品名稱] [最終純數字] [計算出的YYYY-MM-DD日期或None]
+    Do NOT output markdown, quotes, formatting or any explanations.
 
-    Example input: "請胡 卡拉雞腿排25塊 不對，是45塊"
-    Example output: 進貨 卡拉雞腿排 45
+    Example Input 1: "進貨 鮮奶 10瓶 5天"
+    Example Output 1: 進貨 鮮奶 10 2026-05-29 (Note: assuming today is 2026-05-24)
+
+    Example Input 2: "請胡 卡拉雞腿排25塊 不對，是45塊"
+    Example Output 2: 進貨 卡拉雞腿排 45 None
     """
     
     cleaned_command = ""
@@ -406,11 +425,18 @@ def smart_parse_and_execute(text):
                 product_name = parts[1].strip()
                 quantity = float(parts[2])
                 
+                # 🌟 讀取 AI 算好的日期（如果有喊的話）
+                expiry_val = parts[3].strip() if len(parts) >= 4 else "None"
+                
                 best_match = process.extractOne(product_name, all_products, scorer=fuzz.ratio)
                 if best_match and best_match[1] >= 80:
                     product_name = best_match[0]
                     update_sheet_stock(
-                        product_name=product_name, quantity=quantity, action=action, detail_info=f"雙層語意助理: {text}"
+                        product_name=product_name, 
+                        quantity=quantity, 
+                        action=action, 
+                        expiry=expiry_val, # 🚀 丟給後台處理
+                        detail_info=f"雙層語意助理: {text}"
                     )
                 else:
                     st.error(f"🚨 語音輸入失敗：食材【{product_name}】在系統後台完全找不到極度接近的品項！請店長先至 Tab 5 登記新食材與進貨成本。")
@@ -555,6 +581,7 @@ with tab2:
 with tab3:
     st.header("🎙️ 語音輸入")
     st.write("💡 錄音完成並按下停止後，系統將自動進行雙層大腦校正並安全入庫。")
+    st.write("💡 支援指定相對有效期限，例如：「進貨 鮮奶 10瓶 5天」或「進貨 吐司 3包 禮拜五過期」")
     audio_file = st.audio_input("錄音控制台")
 
     if audio_file:
