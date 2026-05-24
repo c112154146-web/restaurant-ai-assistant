@@ -494,8 +494,22 @@ with tab1:
             model = genai.GenerativeModel('gemini-2.5-flash')
             prompt = f"你是餐廳供應鏈專家。目前庫存：\n{df_stock_raw.to_string()}\n出庫紀錄：\n{df_out_raw.tail(100).to_string()}\n請分析未來7天需求並生成Markdown建議採購表格，繁體中文輸出。"
             try:
-                st.markdown(model.generate_content(prompt).text)
-            except Exception as e: st.error(f"預測生成失敗：{e}")
+                # 1. 產生 AI 預測文本
+                prediction_text = model.generate_content(prompt).text
+                st.markdown(prediction_text)
+                
+                # 🚀 2. 補齊 LINE 一鍵連動連結按鈕
+                # 將 AI 預測的文字清理一下，放進 LINE 的文字分享網址中
+                import urllib.parse
+                clean_text_for_line = f"【📦 AI 智慧倉儲系統：未來 7 天緊急採購建議單】\n\n{prediction_text[:300]}..."  # 避免網址過長
+                encoded_text = urllib.parse.quote(clean_text_for_line)
+                line_share_url = f"https://line.me/R/share?text={encoded_text}"
+                
+                st.markdown("### 📲 採購單外發確認")
+                st.link_button("🟢 一鍵發送叫貨明細至 LINE", url=line_share_url, type="primary", use_container_width=True)
+                
+            except Exception as e: 
+                st.error(f"預測生成失敗：{e}")
 
     if run_anomaly and not df_stock_raw.empty:
         st.markdown("---")
