@@ -70,15 +70,13 @@ if "last_processed_audio" not in st.session_state:
     st.session_state.last_processed_audio = None
 
 # =========================================================
-# 2. Google Sheets 連線 (完全恢復你當初最原始的實體檔案讀取法)
+# 2. Google Sheets 連線 (防護自我加載與完備版路徑提示)
 # =========================================================
 @st.cache_resource
 def connect_spreadsheet():
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     try:
         from google.oauth2.service_account import Credentials
-        
-        # 🟢 直接去抓專案目錄下的憑證檔案，不依賴任何 Streamlit 後台 secrets 的 Key 名稱
         creds = Credentials.from_service_account_file('google_key.json', scopes=scope)
         client = gspread.authorize(creds)
         doc = client.open("餐廳倉儲助手")
@@ -221,7 +219,7 @@ def process_fifo_outbound(product_name, out_qty, sheet, headers, records):
 
     batches.sort(key=lambda x: x['expiry'])
     if sum(b['stock'] for b in batches) < out_qty:
-        return False, f"庫存不足！", []
+        return False, f"庫庫存不足！", []
 
     updates = []
     remaining = float(out_qty)
@@ -251,7 +249,6 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
             import datetime as dt
             today = dt.date.today()
             
-            # 定義各類食材的標準保鮮天數 (備用填補機制)
             shelf_life_rules = {
                 "鮮奶": 7, "豆漿": 5, "吐司": 5, "漢堡麵包": 7, "蛋餅皮": 20,
                 "牛肉排": 30, "火腿片": 14, "培根": 14, "卡拉雞腿排": 30, "熱狗": 30, "雞塊": 30,
@@ -260,7 +257,6 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
                 "番茄醬": 90, "美乃滋": 60, "黑胡椒醬": 90, "巧克力醬": 90, "花生醬": 90
             }
             
-            # 🚀 修正：如果 expiry 有傳入有效的 YYYY-MM-DD 格式則優先使用；若是 None 或 'None'，才啟動自動填補天數
             if expiry and expiry != 'None' and re.match(r'^\d{4}-\d{2}-\d{2}$', str(expiry).strip()):
                 final_expiry = str(expiry).strip()
             else:
@@ -371,9 +367,8 @@ def smart_parse_and_execute(text):
     st.info(f"🧠 語意大腦正在自動過濾環境噪聲與口誤...")
     all_products = get_all_products()
     
-    # 🌟 核心升級：在 NLP 提示詞中，加入當前日期，並訓練 AI 認得「相對效期」口訣！
     today_str = datetime.now().strftime("%Y-%m-%d")
-    weekday_str = datetime.now().strftime("%A") # 取得今天是星期幾
+    weekday_str = datetime.now().strftime("%A") 
     
     nlp_prompt = f"""
     You are an advanced voice command assistant for a restaurant kitchen storage. 
@@ -427,24 +422,23 @@ def smart_parse_and_execute(text):
         try:
             parts = cleaned_command.split()
             if len(parts) >= 3:
-                product_name = parts[1].strip()
+                parsed_product_name = parts[1].strip()
                 quantity = float(parts[2])
                 
-                # 🌟 讀取 AI 算好的日期（如果有喊的話）
                 expiry_val = parts[3].strip() if len(parts) >= 4 else "None"
                 
-                best_match = process.extractOne(product_name, all_products, scorer=fuzz.ratio)
+                best_match = process.extractOne(parsed_product_name, all_products, scorer=fuzz.ratio)
                 if best_match and best_match[1] >= 80:
-                    product_name = best_match[0]
+                    matched_product_name = best_match[0]
                     update_sheet_stock(
-                        product_name=product_name, 
+                        product_name=matched_product_name, 
                         quantity=quantity, 
                         action=action, 
-                        expiry=expiry_val, # 🚀 丟給後台處理
+                        expiry=expiry_val, 
                         detail_info=f"雙層語意助理: {text}"
                     )
                 else:
-                    st.error(f"🚨 語音輸入失敗：食材【{product_name}】在系統後台完全找不到極度接近的品項！請店長先至 Tab 5 登記新食材與進貨成本。")
+                    st.error(f"🚨 語音輸入失敗：食材【{parsed_product_name}】在系統後台完全找不到極度接近的品項！請店長先至 Tab 5 登記新食材與進貨成本。")
             else:
                 st.error("系統大腦分析後發現語意結構不完整，請重新宣讀。")
         except Exception as parse_err:
@@ -489,7 +483,6 @@ with tab1:
         st.error(f"資料庫讀取失敗：{db_err}")
         df_stock_raw = pd.DataFrame()
 
-    # --- ⏰ 2026年時間定錨關鍵：取得當前最新日期 ---
     current_date_str = datetime.now().strftime("%Y-%m-%d")
 
     if run_prediction and not df_stock_raw.empty:
@@ -500,14 +493,13 @@ with tab1:
         
         with st.spinner("AI 正在分析歷史銷售趨勢與耗速模型..."):
             model = genai.GenerativeModel('gemini-2.5-flash')
-            # 注入當前正確時間，防止 AI 時空錯亂
             prompt = f"你是餐廳供應鏈專家。目前系統時間為：{current_date_str}。目前庫存：\n{df_stock_raw.to_string()}\n出庫紀錄：\n{df_out_raw.tail(100).to_string()}\n請分析未來7天需求並生成Markdown建議採購表格，繁體中文輸出。"
             try:
                 prediction_text = model.generate_content(prompt).text
                 st.markdown(prediction_text)
                 
                 import urllib.parse
-                clean_text_for_line = f"【📦 AI 智慧倉儲系統：未來 7 天緊急採購建議單】\n\n{prediction_text[:300]}..."  # 避免網址過長
+                clean_text_for_line = f"【📦 AI 智慧倉儲系統：未來 7 天緊急採購建議單】\n\n{prediction_text[:300]}..."  
                 encoded_text = urllib.parse.quote(clean_text_for_line)
                 line_share_url = f"https://line.me/R/share?text={encoded_text}"
                 
@@ -522,7 +514,7 @@ with tab1:
         st.subheader("🕵️‍♂️ 系統自動化稽核與異常偵測告警")
         with st.spinner("安全稽核大腦掃描中..."):
             model = genai.GenerativeModel('gemini-2.5-flash')
-            prompt = f"你是餐廳內控專家。目前系統時間為：{current_date_str}。目前庫存：\n{df_stock_raw.to_string()}\n報廢紀錄：\n{df_waste_raw.tail(50).to_string()}\n請找出潛在異常黑洞，繁體中文回答。"
+            prompt = f"你是餐廳內控專家。目前系統時間為：{current_date_str}。目目前庫存：\n{df_stock_raw.to_string()}\n報廢紀錄：\n{df_waste_raw.tail(50).to_string()}\n請找出潛在異常黑洞，繁體中文回答。"
             try:
                 st.warning(model.generate_content(prompt).text)
             except Exception as e: st.error(f"偵測失敗：{e}")
@@ -532,7 +524,6 @@ with tab1:
         st.subheader("🏦 餐廳智慧商務經營決策報告")
         with st.spinner("正在結算經營毛利結構..."):
             model = genai.GenerativeModel('gemini-2.5-flash')
-            # 注入當前正確時間，確保財務週報產出民國115年/西元2026年的報告
             prompt = f"你是餐飲業財務顧問。目前系統報告日期為：{current_date_str}。食譜：{st.session_state.menu_recipes}\n售價：{st.session_state.meal_prices}\n成本：{st.session_state.ingredient_costs}\n出庫：{df_out_raw.tail(30).to_string()}\n請撰寫高階財務診斷與經營調價建議，繁體中文報告。"
             try:
                 st.info(model.generate_content(prompt).text)
@@ -576,49 +567,42 @@ with tab1:
 
             df_report = pd.DataFrame(report)
             
-            # 1. 顯示表格 (確保開啟自動適應寬度)
             st.dataframe(df_report, use_container_width=True)
             
-# ==================== 🛠️ 核心優化：改用橫向 Plotly 繪製完美圖表 ====================
-            import plotly.express as px
-            
-            # 💡 關鍵變革：將 x 設為"庫存"，y 設為"商品"，一鍵切換為最適合多品項閱讀的「橫向長條圖」！
+            # ==================== 🛠️ 核心優化：改用橫向 Plotly 繪製完美圖表 ====================
             fig = px.bar(
                 df_report, 
                 x="庫存", 
                 y="商品", 
-                orientation="h",  # 👈 強制設定為橫向圖表
+                orientation="h",  # 強制設定為橫向圖表
                 title="📊 各品項當前庫存水位即時統計圖（由大至小排序）",
                 labels={"庫存": "當前庫存數量", "商品": "食材物料名稱"},
-                text="庫存"       # 在長條圖右側直接顯示數字
+                text="庫存"       
             )
             
-            # 動態計算高度：根據你目前後台食材的總數量，自動調整圖表長度，防止39種食材擠在一起
             dynamic_height = max(500, len(df_report) * 25)
             
-            # 優化圖表外觀設定
             fig.update_layout(
-                yaxis={'categoryorder':'total ascending'},  # 💡 自動排序：庫存最多的排最上面，一目了然
+                yaxis={'categoryorder':'total ascending'},  
                 xaxis_title="當前庫存數量",
                 yaxis_title="食材物料名稱",
-                margin=dict(l=150, r=50, t=50, b=50),      # 💡 左側留白拉大到 150，確保「卡拉雞腿排」等長品名文字絕對不會被切到
-                height=dynamic_height,                      # 注入動態自適應高度
-                template="plotly_dark"                      # 完美融入你的黑色高質感 Streamlit 主題
+                margin=dict(l=150, r=50, t=50, b=50),      
+                height=dynamic_height,                      
+                template="plotly_dark"                      
             )
             
-            # 調整長條圖數字顯示位置：放在柱子外側右方，字體變粗方便點收
             fig.update_traces(
                 texttemplate='%{text}', 
                 textposition='outside',
-                marker_color='#2A9D8F' # 💡 改用專業的高質感莫蘭迪綠色，比原本的預設藍色更具商業系統架構感
+                marker_color='#2A9D8F' 
             )
             
-            # 將完美的圖表渲染至網頁，並啟用 100% 容器寬度自我調適，防止右側被切掉
             st.plotly_chart(fig, use_container_width=True)
             # ============================================================================
             
         except Exception as e: 
             st.error(e)
+
 # --- TAB2 (AI OCR) ---
 with tab2:
     st.header("📸 單據辨識")
@@ -712,31 +696,25 @@ with tab4:
                         if st.button("🗑️ 撤回", key=btn_key, use_container_width=True):
                             p_name = row.get('商品名稱')
                             try:
-                                # 為了精準防禦，將數量轉為純數字計算
                                 qty = float(extract_number(row.get('數量', row.get('數量(片/個)', 0))))
                             except:
                                 qty = 0.0
 
                             with st.spinner("正在執行還原..."):
-                                # 🚨 【高容錯撤回防禦機制】
                                 is_safe_to_undo = True
                                 
                                 if target_sheet == "進貨紀錄":
-                                    # 1. 即時重新撈取目前的最新庫存總表
                                     try:
                                         df_current_stock = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
                                         df_current_stock['庫存數量'] = df_current_stock['庫存數量'].apply(extract_number)
                                         
-                                        # 2. 抓出這個品項在後台的當前實體庫存總數
                                         match_stock = df_current_stock[df_current_stock['商品名稱'] == p_name]
                                         current_qty = float(match_stock['庫存數量'].sum()) if not match_stock.empty else 0.0
                                         
-                                        # 3. 攔截：如果發現目前後台庫存不足以被倒扣（例如你手動去Sheets砍了資料，或被別的餐點FIFO吃光了）
                                         if current_qty < qty:
                                             st.warning(f"⚠️ 偵測到後台庫存已變動或被手動移除，目前【{p_name}】帳面剩餘 {current_qty}，不足以執行反向扣除。")
                                             st.info("🔄 系統啟動防禦機制：免除庫存反向追溯，直接強制抹除此筆歷史紀錄。")
                                             
-                                            # 強制至後台刪除該行歷史紀錄，不呼叫會報錯的還原扣庫函式
                                             log_sheet.delete_rows(actual_row_in_sheet)
                                             is_safe_to_undo = False
                                             time.sleep(1)
@@ -744,14 +722,14 @@ with tab4:
                                     except Exception as check_err:
                                         st.error(f"安全性檢查失敗，維持原程序執行: {check_err}")
 
-                                # 4. 數據無異常、或是加法回補（出庫/報廢），則安全呼叫原本的還原機制
                                 if is_safe_to_undo:
-                                    if delete_and_undo_specific_record(target_sheet, actual_row_in_sheet, p_name, row.get('數量', row.get('數量(片/個)', 0))):
+                                    if delete_and_undo_specific_record(target_sheet, actual_row_in_sheet, p_name, qty):
                                         time.sleep(1)
                                         st.rerun()
                                         
                     st.markdown("<hr style='margin:2px 0px; opacity:0.3;'>", unsafe_allow_html=True)
     except Exception as log_err: st.error(f"讀取失敗：{log_err}")
+
 # --- TAB5 (POS 出餐) ---
 with tab5:
     st.header("🍔 POS 前台出餐與後台管理")
@@ -834,12 +812,14 @@ with tab5:
                 st.markdown(f"**{meal_name}** — 💰售價: `${meal_price_show}` 元")
                 st.caption(f"配方：" + " / ".join([f"{k}:{v}" for k, v in ingredients.items()]))
                 if st.button("🛒 賣出一份", key=f"pos_btn_{meal_name}", use_container_width=True):
+                    # 🟢 核心修正：出餐扣帳改用即時直連撈取庫存，徹底拒絕對齊快取造成的超賣Bug
                     try:
-                        records = fetch_sheet_data_cached('工作表1')
+                        records = doc.worksheet('工作表1').get_all_records()
                         total_stock_map = {}
                         for rec in records: 
                             total_stock_map[str(rec.get('商品名稱'))] = total_stock_map.get(str(rec.get('商品名稱')), 0.0) + float(extract_number(rec.get('庫存數量', 0)))
                     except: continue
+                    
                     insufficient = [f"❌ 【{k}】還差 {v - total_stock_map.get(k, 0.0)} 個" for k, v in ingredients.items() if total_stock_map.get(k, 0.0) < v]
                     if insufficient: st.error(f"🚨 原料不足：{', '.join(insufficient)}")
                     else:
