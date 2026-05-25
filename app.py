@@ -9,6 +9,8 @@ import google.generativeai as genai
 import tempfile  # 用來處理暫存錄音檔
 import os        # 用來刪除暫存檔
 import time
+import plotly.express as px
+from google.oauth2.service_account import Credentials
 from datetime import datetime
 from PIL import Image
 from rapidfuzz import process, fuzz
