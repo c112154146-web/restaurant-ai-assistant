@@ -484,22 +484,23 @@ with tab1:
         st.error(f"資料庫讀取失敗：{db_err}")
         df_stock_raw = pd.DataFrame()
 
+    # --- ⏰ 2026年時間定錨關鍵：取得當前最新日期 ---
+    current_date_str = datetime.now().strftime("%Y-%m-%d")
+
     if run_prediction and not df_stock_raw.empty:
         st.markdown("---")
-        st.subheader("🔮 未来 7 天物料需求預測與自動採購單")
+        st.subheader("🔮 未來 7 天物料需求預測與自動採購單")
         if df_out_raw.empty:
             st.info("目前尚無出庫紀錄，系統將自動模擬基本採購模型：")
         
         with st.spinner("AI 正在分析歷史銷售趨勢與耗速模型..."):
             model = genai.GenerativeModel('gemini-2.5-flash')
-            prompt = f"你是餐廳供應鏈專家。目前庫存：\n{df_stock_raw.to_string()}\n出庫紀錄：\n{df_out_raw.tail(100).to_string()}\n請分析未來7天需求並生成Markdown建議採購表格，繁體中文輸出。"
+            # 注入當前正確時間，防止 AI 時空錯亂
+            prompt = f"你是餐廳供應鏈專家。目前系統時間為：{current_date_str}。目前庫存：\n{df_stock_raw.to_string()}\n出庫紀錄：\n{df_out_raw.tail(100).to_string()}\n請分析未來7天需求並生成Markdown建議採購表格，繁體中文輸出。"
             try:
-                # 1. 產生 AI 預測文本
                 prediction_text = model.generate_content(prompt).text
                 st.markdown(prediction_text)
                 
-                # 🚀 2. 補齊 LINE 一鍵連動連結按鈕
-                # 將 AI 預測的文字清理一下，放進 LINE 的文字分享網址中
                 import urllib.parse
                 clean_text_for_line = f"【📦 AI 智慧倉儲系統：未來 7 天緊急採購建議單】\n\n{prediction_text[:300]}..."  # 避免網址過長
                 encoded_text = urllib.parse.quote(clean_text_for_line)
@@ -516,7 +517,7 @@ with tab1:
         st.subheader("🕵️‍♂️ 系統自動化稽核與異常偵測告警")
         with st.spinner("安全稽核大腦掃描中..."):
             model = genai.GenerativeModel('gemini-2.5-flash')
-            prompt = f"你是餐廳內控專家。目前庫存：\n{df_stock_raw.to_string()}\n報廢紀錄：\n{df_waste_raw.tail(50).to_string()}\n請找出潛在異常黑洞，繁體中文回答。"
+            prompt = f"你是餐廳內控專家。目前系統時間為：{current_date_str}。目前庫存：\n{df_stock_raw.to_string()}\n報廢紀錄：\n{df_waste_raw.tail(50).to_string()}\n請找出潛在異常黑洞，繁體中文回答。"
             try:
                 st.warning(model.generate_content(prompt).text)
             except Exception as e: st.error(f"偵測失敗：{e}")
@@ -526,7 +527,8 @@ with tab1:
         st.subheader("🏦 餐廳智慧商務經營決策報告")
         with st.spinner("正在結算經營毛利結構..."):
             model = genai.GenerativeModel('gemini-2.5-flash')
-            prompt = f"你是餐飲業財務顧問。食譜：{st.session_state.menu_recipes}\n售價：{st.session_state.meal_prices}\n成本：{st.session_state.ingredient_costs}\n出庫：{df_out_raw.tail(30).to_string()}\n請撰寫高階財務診斷與經營調價建議，繁體中文報告。"
+            # 注入當前正確時間，確保財務週報產出民國115年/西元2026年的報告
+            prompt = f"你是餐飲業財務顧問。目前系統報告日期為：{current_date_str}。食譜：{st.session_state.menu_recipes}\n售價：{st.session_state.meal_prices}\n成本：{st.session_state.ingredient_costs}\n出庫：{df_out_raw.tail(30).to_string()}\n請撰寫高階財務診斷與經營調價建議，繁體中文報告。"
             try:
                 st.info(model.generate_content(prompt).text)
             except Exception as e: st.error(f"決策報告生成失敗：{e}")
@@ -571,7 +573,6 @@ with tab1:
             st.dataframe(df_report, use_container_width=True)
             st.bar_chart(df_report.set_index("商品")[["庫存"]])
         except Exception as e: st.error(e)
-
 # --- TAB2 (AI OCR) ---
 with tab2:
     st.header("📸 單據辨識")
@@ -664,14 +665,47 @@ with tab4:
                         btn_key = f"undo_{target_sheet}_{actual_row_in_sheet}_{idx}"
                         if st.button("🗑️ 撤回", key=btn_key, use_container_width=True):
                             p_name = row.get('商品名稱')
-                            qty = row.get('數量', row.get('數量(片/個)', 0))
+                            try:
+                                # 為了精準防禦，將數量轉為純數字計算
+                                qty = float(extract_number(row.get('數量', row.get('數量(片/個)', 0))))
+                            except:
+                                qty = 0.0
+
                             with st.spinner("正在執行還原..."):
-                                if delete_and_undo_specific_record(target_sheet, actual_row_in_sheet, p_name, qty):
-                                    time.sleep(1)
-                                    st.rerun()
+                                # 🚨 【高容錯撤回防禦機制】
+                                is_safe_to_undo = True
+                                
+                                if target_sheet == "進貨紀錄":
+                                    # 1. 即時重新撈取目前的最新庫存總表
+                                    try:
+                                        df_current_stock = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
+                                        df_current_stock['庫存數量'] = df_current_stock['庫存數量'].apply(extract_number)
+                                        
+                                        # 2. 抓出這個品項在後台的當前實體庫存總數
+                                        match_stock = df_current_stock[df_current_stock['商品名稱'] == p_name]
+                                        current_qty = float(match_stock['庫存數量'].sum()) if not match_stock.empty else 0.0
+                                        
+                                        # 3. 攔截：如果發現目前後台庫存不足以被倒扣（例如你手動去Sheets砍了資料，或被別的餐點FIFO吃光了）
+                                        if current_qty < qty:
+                                            st.warning(f"⚠️ 偵測到後台庫存已變動或被手動移除，目前【{p_name}】帳面剩餘 {current_qty}，不足以執行反向扣除。")
+                                            st.info("🔄 系統啟動防禦機制：免除庫存反向追溯，直接強制抹除此筆歷史紀錄。")
+                                            
+                                            # 強制至後台刪除該行歷史紀錄，不呼叫會報錯的還原扣庫函式
+                                            log_sheet.delete_rows(actual_row_in_sheet)
+                                            is_safe_to_undo = False
+                                            time.sleep(1)
+                                            st.rerun()
+                                    except Exception as check_err:
+                                        st.error(f"安全性檢查失敗，維持原程序執行: {check_err}")
+
+                                # 4. 數據無異常、或是加法回補（出庫/報廢），則安全呼叫原本的還原機制
+                                if is_safe_to_undo:
+                                    if delete_and_undo_specific_record(target_sheet, actual_row_in_sheet, p_name, row.get('數量', row.get('數量(片/個)', 0))):
+                                        time.sleep(1)
+                                        st.rerun()
+                                        
                     st.markdown("<hr style='margin:2px 0px; opacity:0.3;'>", unsafe_allow_html=True)
     except Exception as log_err: st.error(f"讀取失敗：{log_err}")
-
 # --- TAB5 (POS 出餐) ---
 with tab5:
     st.header("🍔 POS 前台出餐與後台管理")
