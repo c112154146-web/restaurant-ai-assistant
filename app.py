@@ -577,30 +577,39 @@ with tab1:
             # 1. 顯示表格 (確保開啟自動適應寬度)
             st.dataframe(df_report, use_container_width=True)
             
-            # ==================== 🛠️ 核心優化：改用 Plotly 繪製完美圖表 ====================
+# ==================== 🛠️ 核心優化：改用橫向 Plotly 繪製完美圖表 ====================
             import plotly.express as px
             
-            # 使用 plotly 建立長條圖
+            # 💡 關鍵變革：將 x 設為"庫存"，y 設為"商品"，一鍵切換為最適合多品項閱讀的「橫向長條圖」！
             fig = px.bar(
                 df_report, 
-                x="商品", 
-                y="庫存", 
-                title="各品項當前庫存水位統計圖",
+                x="庫存", 
+                y="商品", 
+                orientation="h",  # 👈 強制設定為橫向圖表
+                title="📊 各品項當前庫存水位即時統計圖（由大至小排序）",
                 labels={"庫存": "當前庫存數量", "商品": "食材物料名稱"},
-                text="庫存" # 在長條圖柱子上方直接顯示數字，更直觀
+                text="庫存"       # 在長條圖右側直接顯示數字
             )
+            
+            # 動態計算高度：根據你目前後台食材的總數量，自動調整圖表長度，防止39種食材擠在一起
+            dynamic_height = max(500, len(df_report) * 25)
             
             # 優化圖表外觀設定
             fig.update_layout(
-                xaxis_tickangle=-45,          # 💡 讓 X 軸字體傾斜 45 度，防止垂直站立、方便水平閱讀
-                xaxis={'categoryorder':'total descending'}, # 自動由大到小排序，排版更專業
-                margin=dict(l=20, r=20, t=50, b=100),       # 留白調整，防止文字被切到
-                height=500,                   # 固定圖表高度
-                template="plotly_dark"        # 💡 自動適應你目前的 Streamlit 暗色系黑色主題 (Dark Mode)
+                yaxis={'categoryorder':'total ascending'},  # 💡 自動排序：庫存最多的排最上面，一目了然
+                xaxis_title="當前庫存數量",
+                yaxis_title="食材物料名稱",
+                margin=dict(l=150, r=50, t=50, b=50),      # 💡 左側留白拉大到 150，確保「卡拉雞腿排」等長品名文字絕對不會被切到
+                height=dynamic_height,                      # 注入動態自適應高度
+                template="plotly_dark"                      # 完美融入你的黑色高質感 Streamlit 主題
             )
             
-            # 調整柱子文字的位置在上方外側
-            fig.update_traces(texttemplate='%{text}', textposition='outside')
+            # 調整長條圖數字顯示位置：放在柱子外側右方，字體變粗方便點收
+            fig.update_traces(
+                texttemplate='%{text}', 
+                textposition='outside',
+                marker_color='#2A9D8F' # 💡 改用專業的高質感莫蘭迪綠色，比原本的預設藍色更具商業系統架構感
+            )
             
             # 將完美的圖表渲染至網頁，並啟用 100% 容器寬度自我調適，防止右側被切掉
             st.plotly_chart(fig, use_container_width=True)
