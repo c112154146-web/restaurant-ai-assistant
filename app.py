@@ -70,21 +70,31 @@ if "last_processed_audio" not in st.session_state:
     st.session_state.last_processed_audio = None
 
 # =========================================================
-# 2. Google Sheets 連線 (防護自我加載與完備版路徑提示)
+# 2. Google Sheets 連線 (配合你最新的 Secrets 欄位完美解碼版)
 # =========================================================
 @st.cache_resource
 def connect_spreadsheet():
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     try:
+        # 1. 強行內部加載，防止快取死鎖
         from google.oauth2.service_account import Credentials
-        creds = Credentials.from_service_account_file('google_key.json', scopes=scope)
+        import json
+        
+        # 2. 🟢 關鍵對齊：精準抓取你 Secrets 裡設定的 [gcp_service_account] 底下的 credentials 文字
+        raw_json_str = st.secrets["gcp_service_account"]["credentials"]
+        
+        # 3. 強行將這段 JSON 純文字解碼還原成 Python 認得的金鑰字典物件
+        creds_dict = json.loads(raw_json_str)
+        
+        # 4. 使用 Info 方式進行字典授權連線 (免檔案路徑！)
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
         client = gspread.authorize(creds)
+        
         doc = client.open("餐廳倉儲助手")
         return doc
     except Exception as e:
         st.error(f"連線失敗：{e}")
         return None
-
 @st.cache_data(ttl=60)
 def fetch_sheet_data_cached(sheet_name):
     doc = connect_spreadsheet()
