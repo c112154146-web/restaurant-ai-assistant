@@ -570,9 +570,41 @@ with tab1:
                 })
 
             df_report = pd.DataFrame(report)
+            
+            # 1. 顯示表格 (確保開啟自動適應寬度)
             st.dataframe(df_report, use_container_width=True)
-            st.bar_chart(df_report.set_index("商品")[["庫存"]])
-        except Exception as e: st.error(e)
+            
+            # ==================== 🛠️ 核心優化：改用 Plotly 繪製完美圖表 ====================
+            import plotly.express as px
+            
+            # 使用 plotly 建立長條圖
+            fig = px.bar(
+                df_report, 
+                x="商品", 
+                y="庫存", 
+                title="各品項當前庫存水位統計圖",
+                labels={"庫存": "當前庫存數量", "商品": "食材物料名稱"},
+                text="庫存" # 在長條圖柱子上方直接顯示數字，更直觀
+            )
+            
+            # 優化圖表外觀設定
+            fig.update_layout(
+                xaxis_tickangle=-45,          # 💡 讓 X 軸字體傾斜 45 度，防止垂直站立、方便水平閱讀
+                xaxis={'categoryorder':'total descending'}, # 自動由大到小排序，排版更專業
+                margin=dict(l=20, r=20, t=50, b=100),       # 留白調整，防止文字被切到
+                height=500,                   # 固定圖表高度
+                template="plotly_dark"        # 💡 自動適應你目前的 Streamlit 暗色系黑色主題 (Dark Mode)
+            )
+            
+            # 調整柱子文字的位置在上方外側
+            fig.update_traces(texttemplate='%{text}', textposition='outside')
+            
+            # 將完美的圖表渲染至網頁，並啟用 100% 容器寬度自我調適，防止右側被切掉
+            st.plotly_chart(fig, use_container_width=True)
+            # ============================================================================
+            
+        except Exception as e: 
+            st.error(e)
 # --- TAB2 (AI OCR) ---
 with tab2:
     st.header("📸 單據辨識")
