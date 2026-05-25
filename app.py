@@ -72,14 +72,21 @@ if "last_processed_audio" not in st.session_state:
 # =========================================================
 @st.cache_resource
 def connect_spreadsheet():
+    scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     try:
-        creds_dict = json.loads(st.secrets["gcp_service_account"]["credentials"])
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        creds_dict = st.secrets["gspread_creds"]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
         client = gspread.authorize(creds)
-        return client.open('智慧庫存系統')
+        
+        # 這裡如果失敗，通常是名稱不對或沒開共用
+        doc = client.open("餐廳倉儲助手")
+        return doc
+    except gspread.exceptions.SpreadsheetNotFound:
+        st.error("❌ 連線失敗：在雲端找不到名為『餐廳倉儲助手』的試算表，請檢查名稱是否完全一致！")
+        return None
     except Exception as e:
-        st.error(f"Google 試算表連線失敗，請檢查 secrets 設定：{e}")
+        # 💡 這樣改，就能印出除了 200 之外的真正底層錯誤原因
+        st.error(f"❌ 雲端憑證連線失敗，請檢查 secrets 設定。詳細錯誤原因：{e}")
         return None
 
 @st.cache_data(ttl=60)
