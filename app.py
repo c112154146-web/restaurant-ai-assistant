@@ -70,17 +70,19 @@ if "last_processed_audio" not in st.session_state:
     st.session_state.last_processed_audio = None
 
 # =========================================================
-# 2. Google Sheets 連線 (補強局部防禦載入版)
+# 2. Google Sheets 連線 (雲端 Secrets 保險箱安全防禦版)
 # =========================================================
 @st.cache_resource
 def connect_spreadsheet():
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     try:
-        # 🟢 【核心防禦】在 Function 內部強行再載入一次，徹底阻斷快取死鎖的 name not defined 錯誤！
+        # 🟢 強行內部加載，防止快取死鎖
         from google.oauth2.service_account import Credentials
         
-        # 恢復成你原本的本機檔案讀取路徑，通常名字叫 google_key.json
-        creds = Credentials.from_service_account_file('google_key.json', scopes=scope)
+        # 🚨 核心改變：完全不用 google_key.json 檔案！直接讀取 Streamlit 雲端後台的 Secrets 字典
+        creds_dict = st.secrets["gspread_creds"]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        
         client = gspread.authorize(creds)
         doc = client.open("餐廳倉儲助手")
         return doc
