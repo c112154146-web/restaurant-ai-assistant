@@ -6,3 +6,4 @@ google-generativeai
 Pillow
 cn2an
 rapidfuzz
+plotly
