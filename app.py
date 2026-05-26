@@ -544,9 +544,27 @@ with tab1:
     if run_consultant and not df_stock_raw.empty:
         st.markdown("---")
         st.subheader("🏦 餐廳智慧商務經營決策報告")
-        with st.spinner("正在結算經營毛利結構..."):
+        with st.spinner("正在結算經營毛利結構並精簡報表..."):
             model = genai.GenerativeModel('gemini-2.5-flash')
-            prompt = f"你是餐飲業財務顧問。目前系統報告日期為：{current_date_str}。食譜：{st.session_state.menu_recipes}\n售價：{st.session_state.meal_prices}\n成本：{st.session_state.ingredient_costs}\n出庫：{df_out_raw.tail(30).to_string()}\n請撰寫高階財務診斷與經營調價建議，繁體中文報告。"
+            
+            # 💡 精簡版 Prompt：強制去除冗詞贅句，直接進入數據與策略核心
+            prompt = f"""你是餐飲業財務顧問。
+            目前系統報告日期為：{current_date_str}。
+            食譜：{st.session_state.menu_recipes}\n
+            售價：{st.session_state.meal_prices}\n
+            成本：{st.session_state.ingredient_costs}\n
+            出庫：{df_out_raw.tail(30).to_string()}\n
+            
+            【🚨 格式與內容嚴格要求】：
+            1. 絕對不允許輸出任何「前言」、「總覽文字敘述」、「結語」與「免責聲明」。
+            2. 請直奔主題，首先直接生成『📊 單品項獲利與財務診斷狀況表』。
+               欄位包含：商品名稱、售價、食材成本、單份毛利、單份毛利率、銷售量、總毛利貢獻、營運標籤（如：明星商品、低毛利高銷量、菜單死角）。
+            3. 表格下方請直接以精簡的「無序目標清單 (Bullet Points)」列出『🛠️ 具體經營調價建議』。
+               - 請精準抓出 🥓 培根蛋吐司 與 🥪 總匯三明治 毛利率過低的痛點，直接給出建議調漲的終極目標價（例如：建議調漲至 XX 元），並精簡寫出預估毛利率回升%。
+               - 針對銷售量為 0 的品項，直接給出一句話的套餐推廣策略。
+            4. 拒絕冗長分析，整體報告請保持高度 scannability（可讀性與掃描性），字數越少、越一目了然越好。
+            5. 繁體中文報告。
+            """
             try:
                 st.info(model.generate_content(prompt).text)
             except Exception as e: st.error(f"決策報告生成失敗：{e}")
