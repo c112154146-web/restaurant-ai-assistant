@@ -503,7 +503,19 @@ with tab1:
         
         with st.spinner("AI 正在分析歷史銷售趨勢與耗速模型..."):
             model = genai.GenerativeModel('gemini-2.5-flash')
-            prompt = f"你是餐廳供應鏈專家。目前系統時間為：{current_date_str}。目前庫存：\n{df_stock_raw.to_string()}\n出庫紀錄：\n{df_out_raw.tail(100).to_string()}\n請分析未來7天需求並生成Markdown建議採購表格，繁體中文輸出。"
+            
+            # 💡 優化後的 Prompt：下死命令叫 AI 閉嘴，直接噴表格！
+            prompt = f"""你是餐廳供應鏈專家。
+            目前系統時間基準日為：{current_date_str}。
+            目前庫存：\n{df_stock_raw.to_string()}\n
+            出庫紀錄：\n{df_out_raw.tail(100).to_string()}\n
+            
+            【🚨 格式嚴格要求】：
+            1. 絕對不要輸出任何「注意事項」、「庫存現況概覽」、「前言」或過期品純文字清單。那些資訊在表格中已一目了然，重複輸出非常多餘。
+            2. 請直接一針見血、直奔主題地生成『未來7天需求預測與自動採購建議標準 Markdown 表格』。
+            3. 表格欄位必須包含：商品名稱、目前庫存、有效期限、過去14天日均用量、未來7天預估需求、建議採購數量、營運備註（將過期或無效期的警告精簡寫在備註即可）。
+            4. 繁體中文輸出。
+            """
             try:
                 prediction_text = model.generate_content(prompt).text
                 st.markdown(prediction_text)
