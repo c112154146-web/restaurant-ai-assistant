@@ -544,37 +544,113 @@ with tab1:
     if run_consultant and not df_stock_raw.empty:
         st.markdown("---")
         st.subheader("🏦 餐廳智慧商務經營決策報告")
-        with st.spinner("正在結算經營毛利結構並撰寫深度診斷..."):
+        with st.spinner("🔢 正在透過 Python 結算精準財務結構，並啟動 AI 深度診斷..."):
+            
+            # =========================================================
+            # 🟢 【你的神級優化】前半段：先用 Python 進行 100% 精準的真實財務計算
+            # =========================================================
+            total_revenue = 0.0
+            total_cost = 0.0
+            sales_summary = []
+
+            # 確保出庫紀錄不是空的，防止包含搜尋報錯
+            df_out_check = df_out_raw.copy() if not df_out_raw.empty else pd.DataFrame(columns=['備註'])
+
+            for meal_name, recipe in st.session_state.menu_recipes.items():
+                # 1. 統計這段期間該餐點的真實出餐銷量 (精準對齊備註)
+                if not df_out_check.empty:
+                    sale_count = len(df_out_check[df_out_check["備註"].astype(str).str.contains(meal_name, na=False)])
+                else:
+                    sale_count = 0
+
+                # 2. 抓出售價
+                price = float(st.session_state.meal_prices.get(meal_name, 0.0))
+
+                # 3. 根據 BOM 食譜與食材成本表，算出精準的單份食材成本
+                cost = sum(
+                    float(qty) * float(st.session_state.ingredient_costs.get(ing, 0.0))
+                    for ing, qty in recipe.items()
+                )
+
+                # 4. 計算單份利潤與加總
+                profit = price - cost
+                revenue = sale_count * price
+                total_profit = sale_count * profit
+
+                total_revenue += revenue
+                total_cost += (sale_count * cost)
+
+                # 5. 算單品毛利率 (預防分母為0)
+                margin_pct = f"{round((profit / price) * 100, 2)}%" if price > 0 else "0%"
+
+                # 6. 決定營運標籤邏輯
+                if sale_count == 0:
+                    status_tag = "❌ 菜單死角（無銷量）"
+                elif (profit / price) < 0.35:
+                    status_tag = "🚨 低毛利高銷量（利潤黑洞）"
+                elif sale_count >= 50 and (profit / price) >= 0.45:
+                    status_tag = "⭐ 核心明星商品"
+                else:
+                    status_tag = "👍 營運狀態穩定"
+
+                sales_summary.append({
+                    "餐點": meal_name,
+                    "售價": f"${price}",
+                    "成本": f"${round(cost, 1)}",
+                    "單份毛利": f"${round(profit, 1)}",
+                    "單份毛利率": margin_pct,
+                    "歷史銷量": f"{sale_count} 份",
+                    "總毛利貢獻": f"${round(total_profit, 1)}",
+                    "營運標籤": status_tag
+                })
+
+            # 計算總體毛利與整體毛利率
+            total_gross_profit = total_revenue - total_cost
+            overall_margin = round((total_gross_profit / total_revenue) * 100, 2) if total_revenue > 0 else 0.0
+
+            # 將 Python 算好的財務大盤，轉化為字串格式準備餵給 AI
+            python_calculated_data = f"""
+            【店鋪整體財務結算數據】
+            - 總營業總營收：NT$ {round(total_revenue, 2)}
+            - 總實際食材成本：NT$ {round(total_cost, 2)}
+            - 總利潤（毛利）：NT$ {round(total_gross_profit, 2)}
+            - 整體平均毛利率：{overall_margin}%
+
+            【單品項精準獲利統計明細】
+            {pd.DataFrame(sales_summary).to_string(index=False)}
+            """
+
+            # =========================================================
+            # 🧠後半段：將 Python 算好的完美數字丢給 Gemini，AI 只負責「邏輯推論與診斷」
+            # =========================================================
             model = genai.GenerativeModel('gemini-2.5-flash')
             
-            # 💡 黃金比例 Prompt：保留總表現結算與深度原因分析，但剔除前言結語
-            prompt = f"""你是餐飲業財務顧問。
+            ai_prompt = f"""你現在是一位專精於餐飲連鎖業的頂級財務顧問。
             目前系統報告日期為：{current_date_str}。
-            食譜：{st.session_state.menu_recipes}\n
-            售價：{st.session_state.meal_prices}\n
-            成本：{st.session_state.ingredient_costs}\n
-            出庫：{df_out_raw.tail(30).to_string()}\n
+            
+            以下是系統剛剛透過 Python 引擎『100% 精準結算完成』的真實營運財務數據：
+            {python_calculated_data}
+            
+            請根據以上完全真實的數據，直接撰寫一份高階財務診斷與策略報告。
             
             【🚨 格式與內容結構要求】：
-            1. 嚴格禁止任何形式的「前言」、「結語」、「數據限制說明」與「免責聲明」。
-            2. 請直奔主題，報告開頭直接以 Markdown 加粗字體和 KPI 格式呈現『📈 整體財務表現結算』：
-               - 計算並列出：總營收、總食材成本、總毛利、整體毛利率。
-               - 給予一句話的整體健康度初步診斷。
-            3. 接著直接生成『📊 單品項獲利與財務診斷狀況表』。
-               欄位包含：商品名稱、售價、食材成本、單份毛利、單份毛利率、銷售量、總毛利貢獻、營運標籤。
-            4. 表格下方請列出『🔍 核心單品深度診斷（原因分析）』：
-               - 針對毛利率過低的品項（如：培根蛋吐司、總匯三明治），請老實指出是哪幾項核心食材（如：培根、牛肉排等）成本過高導致利潤被稀釋。
-               - 針對銷售量為 0 的品項，分析其卡在菜單死角的原因（如曝光度不足）。
-               - 針對獲利支柱（如黑咖啡），指出其高毛利率的優勢。
-            5. 最後列出『🛠️ 具體經營調價與行銷策略策略建議』：
-               - 以 Bullet Points 給出具體的調價目標與預估毛利率回升%。
-               - 給出套餐組合建議，字句要精準、有營運操作價值。
-            6. 拒絕長篇大論，維持高度的 scannability（可讀性），多用加粗字體引導視線。
-            7. 繁體中文報告。
+            1. 嚴格禁止任何形式的「前言」、「數據限制說明」、「結語」與「免責聲明」。按鈕按下一律直奔主題。
+            2. 報告第一區塊請列出：『🔍 核心單品財務診斷與痛點分析』
+               - 請直接針對 Python 數據中標記為「🚨 利潤黑洞」與「❌ 菜單死角」的餐點進行直球對決。
+               - 對照你大腦中的常識，明確點出為什麼 🥓 培根蛋吐司 的毛利率會被稀釋到這麼慘？（老實指出是因為培根和吐司的原料成本佔售價比過高）。
+               - 讚美「明星商品」（如黑咖啡或漢堡）的獲利表現。
+            3. 第二區塊請列出：『🛠️ 經營調價與行銷工程具體建議』
+               - 請以條列式（Bullet Points）給出精準的調價目標與策略。
+               - 針對「利潤黑洞」餐點（如培根蛋吐司、總匯三明治），請明確給出調漲至多少元（例如 75-80 元）的直球建議，並精簡寫出調價後的預估利潤回升幅度。
+               - 針對「菜單死角」（銷量為 0）的品項，給出具體的套餐組合行銷建議。
+            4. 內容多用加粗字體引導視線，文字要精煉、有殺傷力，拒絕無意義的客套話。
+            5. 繁體中文報告。
             """
             try:
-                st.info(model.generate_content(prompt).text)
-            except Exception as e: st.error(f"決策報告生成失敗：{e}")
+                # 透過 info 藍色方框在 Streamlit 完美渲染 AI 的高端診斷
+                st.info(model.generate_content(ai_prompt).text)
+            except Exception as e: 
+                st.error(f"決策報告生成失敗：{e}")
 
     st.markdown("---")
     ai_chat_mode()
