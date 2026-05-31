@@ -169,22 +169,81 @@ def ai_chat_mode():
         if doc:
             df_stock = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
             df_out = pd.DataFrame(doc.worksheet('出庫紀錄').get_all_records())
+            
+            # 🟢 核心修正 1：主動向 AI 注入程式碼內的成本、售價與食譜數據（Context Injection）
+            pricing_context = f"""
+            【已知餐廳財務成本標準數據】：
+            1. 各餐點菜單販售價格：{dict(st.session_state.meal_prices)}
+            2. 各原物料基礎進貨成本：{dict(st.session_state.ingredient_costs)}
+            3. 成品餐點與物料食譜 (BOM 表)：{dict(st.session_state.menu_recipes)}
+            """
+            
             model = genai.GenerativeModel('gemini-2.5-flash')
-            prompt = f"你是餐廳智慧倉儲 AI。目前庫存：\n{df_stock.to_string()}\n出庫紀錄：\n{df_out.to_string()}\n使用者問題：\n{user_question}\n請使用繁體中文回答。"
+            
+            # 🟢 核心修正 2：重塑 Prompt，鎖死限制令，逼 AI 進入專業經營診斷角色
+            prompt = f"""
+            你是餐廳智慧倉儲經營特助。
+            目前的系統時間基準日為：2026-05-25。
+            
+            {pricing_context}
+            
+            目前系統即時庫存狀況：
+            {df_stock.to_string()}
+            
+            目前系統歷史出庫紀錄：
+            {df_out.to_string()}
+            
+            使用者提出的問題：
+            {user_question}
+            
+            【回覆規則】：
+            1. 絕對禁止回答任何「因為缺乏進貨成本或銷售價格而無法計算」的推託廢話。
+            2. 請直接交叉比對上方注入的成本數據、歷史出庫紀錄（耗速）與即期品現況，給予使用者一針見血、具體且可執行的價格調整或採購策略建議。
+            3. 使用繁體中文回答。
+            """
+            
             response = model.generate_content(prompt)
             st.chat_message("user").write(user_question)
             st.chat_message("assistant").write(response.text)
 
 def ai_purchase_suggestion():
-    st.subheader("🧠 AI 採購建議")
+    st.subheader("🧠 AI 採購與調價建議")
     doc = connect_spreadsheet()
     if doc:
         df_stock = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
         df_out = pd.DataFrame(doc.worksheet('出庫紀錄').get_all_records())
+        
+        # 🟢 核心修正 3：在採購與預測功能中同樣強行注入財務上下文
+        pricing_context = f"""
+        【已知餐廳財務成本標準數據】：
+        1. 各餐點菜單販售價格：{dict(st.session_state.meal_prices)}
+        2. 各原物料基礎進貨成本：{dict(st.session_state.ingredient_costs)}
+        3. 成品餐點與物料食譜 (BOM 表)：{dict(st.session_state.menu_recipes)}
+        """
+        
         model = genai.GenerativeModel('gemini-2.5-flash')
-        prompt = f"你是餐廳採購 AI。目前庫存：\n{df_stock.to_string()}\n出庫紀錄：\n{df_out.to_string()}\n請分析哪些商品快缺貨與建議補貨量，繁體中文條列。"
+        
+        prompt = f"""
+        你是餐廳採購與智慧經營診斷 AI 專家。
+        目前的系統時間基準日為：2026-05-25。
+        
+        {pricing_context}
+        
+        目前系統即時庫存狀況：
+        {df_stock.to_string()}
+        
+        目前系統歷史出庫紀錄：
+        {df_out.to_string()}
+        
+        請幫店長進行硬核的智慧採購預測與價格調整分析：
+        1. 點名哪些即期商品或滯銷品（例如豆漿、雞蛋、即期高麗菜）面臨報廢，請給予具体的出清促銷定價方案。
+        2. 分析哪些高出貨量食材（例如培根、吐司、牛肉排）利潤可能被壓縮，建議哪些成品餐點應調高售價（並計算利潤率給他看）。
+        3. 點名庫存管理漏洞（如卡拉雞腿排重複且效期缺失問題）。
+        
+        禁止多餘的前言與結語，直接以繁體中文、Markdown 條列式重點回答。
+        """
         st.info(model.generate_content(prompt).text)
-
+        
 def extract_number(val):
     if pd.isna(val): return 0.0
     match = re.search(r'[\d.]+', str(val))
