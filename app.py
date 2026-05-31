@@ -6,15 +6,14 @@ import re
 import uuid
 import cn2an
 import google.generativeai as genai
-import tempfile  # 用來處理暫存錄音檔
-import os        # 用來刪除暫存檔
+import tempfile
+import os
 import time
 import plotly.express as px
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 from PIL import Image
 from rapidfuzz import process, fuzz
-from oauth2client.service_account import ServiceAccountCredentials
 
 st.set_page_config(
     page_title="AI 智慧倉儲系統",
@@ -70,14 +69,12 @@ if "last_processed_audio" not in st.session_state:
     st.session_state.last_processed_audio = None
 
 # =========================================================
-# 2. Google Sheets 連線 (金鑰字典直連免檔案路徑)
+# 2. Google Sheets 連線
 # =========================================================
 @st.cache_resource
 def connect_spreadsheet():
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     try:
-        from google.oauth2.service_account import Credentials
-        import json
         raw_json_str = st.secrets["gcp_service_account"]["credentials"]
         creds_dict = json.loads(raw_json_str)
         creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
@@ -89,16 +86,16 @@ def connect_spreadsheet():
         return None
 
 # =========================================================
-# 🟢 全域資料快取與 API 429 流量超限記憶體後備防禦機制
+# 🟢 終極優化：全域資料快取與 API 429 防禦機制
 # =========================================================
-@st.cache_data(ttl=60)  
+@st.cache_data(ttl=60)
 def fetch_sheet_data_cached(sheet_name):
     try:
         doc = connect_spreadsheet()
         if doc:
-            records = doc.worksheet(sheet_name).get_all_records()
-            st.session_state[f"backup_data_{sheet_name}"] = records
-            return records
+            data = doc.worksheet(sheet_name).get_all_records()
+            st.session_state[f"backup_data_{sheet_name}"] = data
+            return data
     except gspread.exceptions.APIError as api_err:
         if "429" in str(api_err):
             st.warning(f"⚠️ Google 流量超限 (429)！系統已自動啟動【本機記憶體防禦機制】繼續運作。")
@@ -106,10 +103,21 @@ def fetch_sheet_data_cached(sheet_name):
             if backup_key in st.session_state:
                 return st.session_state[backup_key]
         else:
-            st.error(f"Google Sheets API 讀取【{sheet_name}】受阻，請確認名稱正確！")
+            st.error(f"Google API 異常：{api_err}")
     except Exception as e:
         st.error(f"系統讀取失敗：{e}")
     return []
+
+# 建立一個安全的資料刷新器（修復 RecursionError）
+def force_refresh_all_data():
+    fetch_sheet_data_cached.clear()
+    try:
+        doc = connect_spreadsheet()
+        if doc:
+            for name in ['工作表1', '進貨紀錄', '出庫紀錄', '報廢紀錄']:
+                st.session_state[f"backup_data_{name}"] = doc.worksheet(name).get_all_records()
+    except Exception:
+        pass
 
 # =========================================================
 # 3. 工具函式與 KPI
@@ -133,11 +141,10 @@ def show_kpi_dashboard():
             product = row.get('商品名稱', '')
             stock = extract_number(row.get('庫存數量', 0))
             unit = extract_unit(str(row.get('庫存數量', '')))
-
             if stock <= SAFE_STOCK_LEVEL:
                 low_stock += 1
                 low_stock_list.append(f"🚨 【{product}】庫存吃緊！目前僅剩 {stock} {unit} (安全水位: {SAFE_STOCK_LEVEL})")
-
+            
             expiry = str(row.get('有效期限', '')).strip()
             if expiry and stock > 0:
                 try:
@@ -151,7 +158,6 @@ def show_kpi_dashboard():
                 except: pass
 
     expiry_list.sort(key=lambda x: x[0])
-
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("📦 今日進貨", today_in)
     col2.metric("🗑️ 今日報廢", today_waste)
@@ -174,51 +180,8 @@ def ai_chat_mode():
     st.subheader("🤖 AI 倉儲助理")
     user_question = st.chat_input("請詢問庫存問題...")
     if user_question:
-        doc = connect_spreadsheet()
-        if doc:
-            df_stock = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
-            df_out = pd.DataFrame(doc.worksheet('出庫紀錄').get_all_records())
-            
-            pricing_context = f"""
-            【已知餐廳財務成本標準數據】：
-            1. 各餐點菜單販售價格：{dict(st.session_state.meal_prices)}
-            2. 各原物料基礎進貨成本：{dict(st.session_state.ingredient_costs)}
-            3. 成品餐點與物料食譜 (BOM 表)：{dict(st.session_state.menu_recipes)}
-            """
-            
-            model = genai.GenerativeModel('gemini-3.5-flash')
-            
-            prompt = f"""
-            你是餐廳智慧倉儲經營特助。
-            目前的系統時間基準日為：2026-05-25。
-            
-            {pricing_context}
-            
-            目前系統即時庫存狀況：
-            {df_stock.to_string()}
-            
-            目前系統歷史出庫紀錄：
-            {df_out.to_string()}
-            
-            使用者提出的問題：
-            {user_question}
-            
-            【回覆規則】：
-            1. 絕對禁止回答任何「因為缺乏進貨成本或銷售價格而無法計算」的推託廢話。
-            2. 請直接交叉比對上方注入的成本數據、歷史出庫紀錄（耗速）與即期品現況，給予使用者一針見血、具體且可執行的價格調整或採購策略建議。
-            3. 使用繁體中文回答。
-            """
-            
-            response = model.generate_content(prompt)
-            st.chat_message("user").write(user_question)
-            st.chat_message("assistant").write(response.text)
-
-def ai_purchase_suggestion():
-    st.subheader("🧠 AI 採購與調價建議")
-    doc = connect_spreadsheet()
-    if doc:
-        df_stock = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
-        df_out = pd.DataFrame(doc.worksheet('出庫紀錄').get_all_records())
+        df_stock = pd.DataFrame(fetch_sheet_data_cached('工作表1'))
+        df_out = pd.DataFrame(fetch_sheet_data_cached('出庫紀錄'))
         
         pricing_context = f"""
         【已知餐廳財務成本標準數據】：
@@ -228,28 +191,46 @@ def ai_purchase_suggestion():
         """
         
         model = genai.GenerativeModel('gemini-3.5-flash')
-        
         prompt = f"""
-        你是餐廳採購與智慧經營診斷 AI 專家。
-        目前的系統時間基準日為：2026-05-25。
-        
+        你是餐廳智慧倉儲經營特助。目前的系統時間基準日為：2026-05-25。
         {pricing_context}
-        
-        目前系統即時庫存狀況：
-        {df_stock.to_string()}
-        
-        目前系統歷史出庫紀錄：
-        {df_out.to_string()}
-        
-        請幫店長進行硬核的智慧採購預測與價格調整分析：
-        1. 點名哪些即期商品或滯銷品（例如豆漿、雞蛋、即期高麗菜）面臨報廢，請給予具体的出清促銷定價方案。
-        2. 分析哪些高出貨量食材（例如培根、吐司、牛肉排）利潤可能被壓縮，建議哪些成品餐點應調高售價（並計算利潤率給他看）。
-        3. 點名庫存管理漏洞（如卡拉雞腿排重複且效期缺失問題）。
-        
-        禁止多餘的前言與結語，直接以繁體中文、Markdown 條列式重點回答。
+        目前系統即時庫存狀況：\n{df_stock.to_string()}
+        目前系統歷史出庫紀錄：\n{df_out.to_string()}
+        使用者提出的問題：\n{user_question}
+        【回覆規則】：
+        1. 絕對禁止回答任何「因為缺乏進貨成本或銷售價格而無法計算」的推託廢話。
+        2. 請直接交叉比對上方注入的成本數據、歷史出庫紀錄（耗速）與即期品現況，給予使用者一針見血、具體且可執行的價格調整或採購策略建議。
+        3. 使用繁體中文回答。
         """
-        st.info(model.generate_content(prompt).text)
-        
+        response = model.generate_content(prompt)
+        st.chat_message("user").write(user_question)
+        st.chat_message("assistant").write(response.text)
+
+def ai_purchase_suggestion():
+    st.subheader("🧠 AI 採購與調價建議")
+    df_stock = pd.DataFrame(fetch_sheet_data_cached('工作表1'))
+    df_out = pd.DataFrame(fetch_sheet_data_cached('出庫紀錄'))
+    
+    pricing_context = f"""
+    【已知餐廳財務成本標準數據】：
+    1. 各餐點菜單販售價格：{dict(st.session_state.meal_prices)}
+    2. 各原物料基礎進貨成本：{dict(st.session_state.ingredient_costs)}
+    3. 成品餐點與物料食譜 (BOM 表)：{dict(st.session_state.menu_recipes)}
+    """
+    model = genai.GenerativeModel('gemini-3.5-flash')
+    prompt = f"""
+    你是餐廳採購與智慧經營診斷 AI 專家。目前的系統時間基準日為：2026-05-25。
+    {pricing_context}
+    目前系統即時庫存狀況：\n{df_stock.to_string()}
+    目前系統歷史出庫紀錄：\n{df_out.to_string()}
+    請幫店長進行硬核的智慧採購預測與價格調整分析：
+    1. 點名哪些即期商品或滯銷品（例如豆漿、雞蛋、即期高麗菜）面臨報廢，請給予具体的出清促銷定價方案。
+    2. 分析哪些高出貨量食材利潤可能被壓縮，建議哪些成品餐點應調高售價（並計算利潤率給他看）。
+    3. 點名庫存管理漏洞（如卡拉雞腿排重複且效期缺失問題）。
+    禁止多餘的前言與結語，直接以繁體中文、Markdown 條列式重點回答。
+    """
+    st.info(model.generate_content(prompt).text)
+
 def extract_number(val):
     if pd.isna(val): return 0.0
     match = re.search(r'[\d.]+', str(val))
@@ -261,16 +242,12 @@ def extract_unit(val):
     return match.group() if match else ""
 
 def get_all_products():
-    try:
-        doc = connect_spreadsheet()
-        if doc:
-            sheet = doc.worksheet('工作表1')
-            a_column = sheet.col_values(1)
-            if len(a_column) > 1:
-                return [str(p).strip() for p in a_column[1:] if p and str(p).strip() != ""]
-        return []
-    except: 
-        return []
+    data = fetch_sheet_data_cached('工作表1')
+    if data:
+        df = pd.DataFrame(data)
+        if '商品名稱' in df.columns:
+            return [str(p).strip() for p in df['商品名稱'].tolist() if str(p).strip()]
+    return []
 
 def log_transaction(sheet_name, product_name, quantity, detail):
     try:
@@ -323,7 +300,6 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
         if action == 'IN':
             import datetime as dt
             today = dt.date.today()
-            
             shelf_life_rules = {
                 "鮮奶": 7, "豆漿": 5, "吐司": 5, "漢堡麵包": 7, "蛋餅皮": 20,
                 "牛肉排": 30, "火腿片": 14, "培根": 14, "卡拉雞腿排": 30, "熱狗": 30, "雞塊": 30,
@@ -331,7 +307,6 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
                 "紅茶葉": 180, "綠茶葉": 180, "咖啡豆": 180, "砂糖": 365, 
                 "番茄醬": 90, "美乃滋": 60, "黑胡椒醬": 90, "巧克力醬": 90, "花生醬": 90
             }
-            
             if expiry and expiry != 'None' and re.match(r'^\d{4}-\d{2}-\d{2}$', str(expiry).strip()):
                 final_expiry = str(expiry).strip()
             else:
@@ -341,28 +316,21 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
             new_row = [""] * len(headers)
             if '商品名稱' in headers: new_row[headers.index('商品名稱')] = product_name
             if '庫存數量' in headers: new_row[headers.index('庫存數量')] = quantity
-            if '有效期限' in headers: 
-                new_row[headers.index('有效期限')] = final_expiry
-            if '最後更新時間' in headers: 
-                new_row[headers.index('最後更新時間')] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            if 'ID' in headers: 
-                new_row[headers.index('ID')] = str(uuid.uuid4())[:8]
+            if '有效期限' in headers: new_row[headers.index('有效期限')] = final_expiry
+            if '最後更新時間' in headers: new_row[headers.index('最後更新時間')] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            if 'ID' in headers: new_row[headers.index('ID')] = str(uuid.uuid4())[:8]
 
             sheet.append_row(new_row)
             log_transaction('進貨紀錄', product_name, quantity, detail_info)
-            
             if not is_undo:
                 st.success(f"進貨成功：{product_name} +{quantity} (有效期限: {final_expiry})")
-                st.session_state.last_transaction = {
-                    "action": "IN", "product": product_name, "quantity": quantity, "expiry": final_expiry
-                }
+                st.session_state.last_transaction = {"action": "IN", "product": product_name, "quantity": quantity, "expiry": final_expiry}
                 
         elif action in ['OUT', 'WASTE']:
             success, msg, updates = process_fifo_outbound(product_name, quantity, sheet, headers, records)
             if not success:
                 st.error(f"{product_name} 扣帳失敗：{msg}")
                 return
-
             sheet.batch_update(updates)
             if action == 'OUT':
                 log_transaction('出庫紀錄', product_name, quantity, detail_info)
@@ -375,9 +343,7 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
                     st.error(f"報廢成功：{product_name} -{quantity}")
                     st.session_state.last_transaction = {"action": "WASTE", "product": product_name, "quantity": quantity}
         
-        # 🟢 核心修正：大刀砍除引爆無窮遞迴的 force_refresh_all_data()，改用官方安全的刷新機制
-        st.cache_data.clear()
-        st.rerun()
+        force_refresh_all_data()
     except Exception as e: st.error(f"系統更新失敗：{e}")
 
 def undo_last_transaction():
@@ -390,14 +356,14 @@ def undo_last_transaction():
         update_sheet_stock(product_name=last['product'], quantity=last['quantity'], action='IN', detail_info="操作撤回：補回錯誤扣帳", is_undo=True)
     st.success("🎉 已成功還原庫存！")
     st.session_state.last_transaction = None
-    st.cache_data.clear()
+    force_refresh_all_data()
     st.rerun()
 
 def delete_and_undo_specific_record(sheet_name, row_index, product_name, quantity):
     try:
         doc = connect_spreadsheet()
         if not doc: return False
-
+        
         if sheet_name == '進貨紀錄':
             rollback_action = 'OUT'
             action_text = "撤回進貨"
@@ -431,7 +397,7 @@ def delete_and_undo_specific_record(sheet_name, row_index, product_name, quantit
         log_sheet = doc.worksheet(sheet_name)
         log_sheet.delete_rows(row_index)
         
-        st.cache_data.clear()
+        force_refresh_all_data()
         st.success(f"🎉 成功同步撤回！已從【{sheet_name}】刪除該紀錄，並完成庫存【{action_text}】修正。")
         return True
     except Exception as e:
@@ -439,34 +405,26 @@ def delete_and_undo_specific_record(sheet_name, row_index, product_name, quantit
         return False
 
 # =========================================================
-# 5. ⭐ 雙層大腦語意降噪解析演算法 (包含智慧日期相對推算)
+# 5. ⭐ 雙層大腦語意降噪解析演算法
 # =========================================================
 def smart_parse_and_execute(text):
     st.info(f"🧠 語意大腦正在自動過濾環境噪聲與口誤...")
     all_products = get_all_products()
-    
     today_str = datetime.now().strftime("%Y-%m-%d")
     weekday_str = datetime.now().strftime("%A") 
     
     nlp_prompt = f"""
     You are an advanced voice command assistant for a restaurant kitchen storage. 
-    The input text comes from a microphone and may contain speech corrections or environment noise.
-    
     Current Date Today is: {today_str} ({weekday_str})
-
     Valid product list in our database:
     {', '.join(all_products)}
 
     Your mission:
-    1. Identify the core action intent: '進貨', '出庫', or '報廢'. (Default to '進貨' if unclear).
+    1. Identify the core action intent: '進貨', '出庫', or '報廢'.
     2. Identify the product name. Correct it to match the closest item in the "Valid product list".
     3. Identify the final corrected numeric quantity.
-    4. 🌟 Smart Expiry Calculation: Look at the text to see if the user mentioned any expiry info (e.g., "5天", "保鮮一週", "禮拜五過期", "下週二過期"). 
-       Based on Today's date ({today_str}), calculate the EXACT target expiry date in YYYY-MM-DD format.
-       - If they say "5天" or "5天過期", add 5 days to today.
-       - If they say "禮拜五過期", calculate the date of the UPCOMING Friday.
-       - If they say "下週二過期", calculate the date of Tuesday next week.
-       - If they do NOT mention any date or expiry info, output 'None'.
+    4. Smart Expiry Calculation: Look at the text to see if the user mentioned any expiry info.
+       Based on Today's date ({today_str}), calculate the EXACT target expiry date in YYYY-MM-DD format. Output 'None' if not mentioned.
 
     Output ONLY the cleaned standard command in this exact format: [動作] [商品名稱] [最終純數字] [計算出的YYYY-MM-DD日期或None]
     Do NOT output markdown, quotes, formatting or any explanations.
@@ -485,7 +443,6 @@ def smart_parse_and_execute(text):
 
     if cleaned_command:
         st.success(f"✨ 語意大腦過濾成功 ➡️ 精準還原指令：『{cleaned_command}』")
-        
         action = 'IN'
         if '進貨' in cleaned_command: action = 'IN'
         elif '出庫' in cleaned_command: action = 'OUT'
@@ -509,27 +466,27 @@ def smart_parse_and_execute(text):
                         detail_info=f"雙層語意助理: {text}"
                     )
                 else:
-                    st.error(f"🚨 語音輸入失敗：食材【{parsed_product_name}】在系統後台完全找不到極度接近的品項！請店長先至 Tab 5 登記新食材與進貨成本。")
+                    st.error(f"🚨 語音輸入失敗：食材【{parsed_product_name}】在後台找不到對應品項！")
             else:
-                st.error("系統大腦分析後發現語意結構不完整，請重新宣讀。")
+                st.error("系統分析語意結構不完整，請重新宣讀。")
         except Exception as parse_err:
-            st.error(f"指令實體解碼失敗: {parse_err}")
+            st.error(f"指令解碼失敗: {parse_err}")
 
 # =========================================================
-# 6. 前端介面與 5 大分頁完全體佈局 (100% 一字不漏完整保留)
+# 6. 前端介面佈局
 # =========================================================
 st.title("📦 AI 智慧倉儲助手")
 
 if st.session_state.get("last_transaction") is not None:
     last = st.session_state["last_transaction"]
     st.info(f"💡 上一筆更動：【{last['action']}】 {last['product']} {last['quantity']} 個")
-    if st.button("↩️ 點我一鍵撤回還原庫存", key="undo_top_btn", type="primary", use_container_width=True):
+    if st.button("↩️ 點我一鍵撤回還原庫存", type="primary", use_container_width=True):
         undo_last_transaction()
 
 show_kpi_dashboard()
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 AI 分析", "📸 單據辨識", "🎙️ 語音", "🕒 紀錄", "🍔 POS出餐"])
 
-# --- TAB1 (AI 分析 - 3 大 AI 高階功能) ---
+# --- TAB1 (AI 分析) ---
 with tab1:
     st.header("🧠 AI 預測中心")
     ai_col1, ai_col2, ai_col3 = st.columns(3)
@@ -541,18 +498,10 @@ with tab1:
     with ai_col3:
         run_consultant = st.button("📊 生成 AI 智慧經營決策週報", use_container_width=True)
 
-    try:
-        doc = connect_spreadsheet()
-        if doc:
-            df_stock_raw = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
-            df_in_raw = pd.DataFrame(doc.worksheet('進貨紀錄').get_all_records())
-            df_out_raw = pd.DataFrame(doc.worksheet('出庫紀錄').get_all_records())
-            df_waste_raw = pd.DataFrame(doc.worksheet('報廢紀錄').get_all_records())
-        else:
-            df_stock_raw = pd.DataFrame()
-    except Exception as db_err:
-        st.error(f"資料庫讀取失敗：{db_err}")
-        df_stock_raw = pd.DataFrame()
+    df_stock_raw = pd.DataFrame(fetch_sheet_data_cached('工作表1'))
+    df_in_raw = pd.DataFrame(fetch_sheet_data_cached('進貨紀錄'))
+    df_out_raw = pd.DataFrame(fetch_sheet_data_cached('出庫紀錄'))
+    df_waste_raw = pd.DataFrame(fetch_sheet_data_cached('報廢紀錄'))
 
     current_date_str = datetime.now().strftime("%Y-%m-%d")
 
@@ -564,36 +513,28 @@ with tab1:
         
         with st.spinner("AI 正在分析歷史銷售趨勢與耗速模型..."):
             model = genai.GenerativeModel('gemini-3.5-flash')
-            prompt = f"""你是餐廳供應鏈專家。
-            目前系統時間基準日為：{current_date_str}。
-            目前庫存：\n{df_stock_raw.to_string()}\n
-            出庫紀錄：\n{df_out_raw.tail(100).to_string()}\n
-            
-            【🚨 格式嚴格要求】：
-            1. 絕對不要輸出任何「注意事項」、「庫存現況概覽」、「前言」或過期品純文字清單。
-            2. 請直接一針見血、直奔主題地生成『未來7天需求預測與自動採購建議標準 Markdown 表格』。
-            3. 表格欄位必須包含：商品名稱、目前庫存、有效期限、過去14天日均用量、未來7天預估需求、建議採購數量、營運備註（將過期或無效期的警告精簡寫在備註即可）。
-            4. 繁體中文輸出。
-            """
+            prompt = f"""你是餐廳供應鏈專家。基準日：{current_date_str}。
+            目前庫存：\n{df_stock_raw.to_string()}\n出庫紀錄：\n{df_out_raw.tail(100).to_string()}\n
+            請直接生成『未來7天需求預測與自動採購建議標準 Markdown 表格』。禁止廢話。
+            表格欄位包含：商品名稱、目前庫存、有效期限、過去14天日均用量、未來7天預估需求、建議採購數量、營運備註。繁體中文輸出。"""
             try:
                 prediction_text = model.generate_content(prompt).text
                 st.markdown(prediction_text)
-                
                 import urllib.parse
-                clean_text_for_line = f"【📦 AI 智慧倉儲系統：未來 7 天緊急採購建議單】\n\n{prediction_text[:300]}..."  
-                encoded_text = urllib.parse.quote(clean_text_for_line)
-                line_share_url = f"https://line.me/R/share?text={encoded_text}"
+                encoded_text = urllib.parse.quote(f"【📦 AI 智慧倉儲系統：未來 7 天緊急採購建議單】\n\n{prediction_text[:300]}...")  
                 st.markdown("### 📲 採購單外發確認")
-                st.link_button("🟢 一鍵發送叫貨明細至 LINE", url=line_share_url, type="primary", use_container_width=True)
-            except Exception as e: st.error(f"預測生成失敗：{e}")
+                st.link_button("🟢 一鍵發送叫貨明細至 LINE", url=f"https://line.me/R/share?text={encoded_text}", type="primary", use_container_width=True)
+            except Exception as e: 
+                st.error(f"預測生成失敗：{e}")
 
     if run_anomaly and not df_stock_raw.empty:
         st.markdown("---")
         st.subheader("🕵️‍♂️ 系統自動化稽核與異常偵測告警")
         with st.spinner("安全稽核大腦掃描中..."):
             model = genai.GenerativeModel('gemini-3.5-flash')
-            prompt = f"你是餐廳內控專家。目前系統時間為：{current_date_str}。目前庫存：\n{df_stock_raw.to_string()}\n報廢紀錄：\n{df_waste_raw.tail(50).to_string()}\n請找出潛在異常黑洞，繁體中文回答。"
-            try: st.warning(model.generate_content(prompt).text)
+            prompt = f"你是餐廳內控專家。基準日為：{current_date_str}。目前庫存：\n{df_stock_raw.to_string()}\n報廢紀錄：\n{df_waste_raw.tail(50).to_string()}\n請找出潛在異常黑洞，繁體中文回答。"
+            try:
+                st.warning(model.generate_content(prompt).text)
             except Exception as e: st.error(f"偵測失敗：{e}")
 
     if run_consultant and not df_stock_raw.empty:
@@ -603,34 +544,52 @@ with tab1:
             total_revenue = 0.0
             total_cost = 0.0
             sales_summary = []
-            df_out_check = df_out_raw.copy() if not df_out_raw.empty else pd.DataFrame()
+            
+            # 🟢 優化效能：先建立快取字典，不再跑 N^2 雙層迴圈
+            sales_counter = {}
+            if not df_out_raw.empty:
+                for _, row in df_out_raw.iterrows():
+                    detail_str = str(row.to_dict())
+                    for meal in st.session_state.menu_recipes.keys():
+                        clean_meal = re.sub(r'[^\w\s]', '', meal).strip()
+                        if clean_meal in detail_str:
+                            sales_counter[meal] = sales_counter.get(meal, 0) + 1
 
             for meal_name, recipe in st.session_state.menu_recipes.items():
-                clean_meal_name = re.sub(r'[^\w\s]', '', meal_name).strip()
-                sale_count = 0
-                if not df_out_check.empty:
-                    col_list = [str(c) for c in df_out_check.columns]
-                    mask = pd.Series([False] * len(df_out_check))
-                    for col in col_list:
-                        if "商品" in col or "備註" in col or "名稱" in col or "餐點" in col:
-                            mask = mask | df_out_check[col].astype(str).str.contains(clean_meal_name, na=False)
-                    sale_count = len(df_out_check[mask])
-
+                sale_count = sales_counter.get(meal_name, 0)
                 price = float(st.session_state.meal_prices.get(meal_name, 0.0))
                 cost = sum(float(qty) * float(st.session_state.ingredient_costs.get(ing, 0.0)) for ing, qty in recipe.items())
                 profit = price - cost
                 revenue = sale_count * price
                 total_profit = sale_count * profit
+
                 total_revenue += revenue
                 total_cost += (sale_count * cost)
                 margin_pct = f"{round((profit / price) * 100, 2)}%" if price > 0 else "0%"
 
-                status_tag = "❌ 菜單死角" if sale_count == 0 else ("🚨 利潤黑洞" if (profit / price) < 0.35 else ("⭐ 明星商品" if sale_count >= 3 else "👍 穩定"))
-                sales_summary.append({"餐點": meal_name, "售價": f"${price}", "成本": f"${round(cost, 1)}", "單份毛利": f"${round(profit, 1)}", "單份毛利率": margin_pct, "歷史銷量": f"{sale_count} 份", "總毛利貢獻": f"${round(total_profit, 1)}", "營運標籤": status_tag})
-            
-            # 呼叫已注入財務上下文的 3.5 決策大腦
-            ai_purchase_suggestion()
+                if sale_count == 0: status_tag = "❌ 菜單死角（無銷量）"
+                elif (profit / price) < 0.35: status_tag = "🚨 低毛利高銷量（利潤黑洞）"
+                elif sale_count >= 3: status_tag = "⭐ 核心明星商品"
+                else: status_tag = "👍 營運狀態穩定"
 
+                sales_summary.append({
+                    "餐點": meal_name, "售價": f"${price}", "成本": f"${round(cost, 1)}",
+                    "單份毛利": f"${round(profit, 1)}", "單份毛利率": margin_pct,
+                    "歷史銷量": f"{sale_count} 份", "總毛利貢獻": f"${round(total_profit, 1)}",
+                    "營運標籤": status_tag
+                })
+
+            model = genai.GenerativeModel('gemini-3.5-flash')
+            ai_prompt = f"""你是餐廳財務顧問。以下是已完成計算的餐點營運數據：\n{sales_summary}\n
+            請完成：1.整體營運健康度分析 2.低毛利商品原因分析 3.高毛利商品優勢分析 4.滯銷商品問題分析 5.三項具體調價建議 6.三項套餐行銷建議。
+            禁止前言與結語，使用 Markdown 重點加粗，保持商業專業感。"""
+            try:
+                st.info(model.generate_content(ai_prompt).text)
+            except Exception as e: 
+                st.error(f"決策報告生成失敗：{e}")
+
+    st.markdown("---")
+    ai_chat_mode()
     st.markdown("---")
     st.header("📊 耗速統計")
     if st.button("開始分析趨勢") and not df_stock_raw.empty:
@@ -645,100 +604,91 @@ with tab1:
 
             report = []
             today = datetime.now()
+
             for _, row in df_stock_copy.iterrows():
                 product = row['商品名稱']
                 current_stock = row['庫存數量']
                 product_out = df_out_copy[df_out_copy['商品名稱'] == product] if not df_out_copy.empty else pd.DataFrame()
-                burn_rate = product_out['數量'].sum() / max(1, (today - product_out['日期'].min()).days) if not product_out.empty and not product_out['日期'].isna().all() else 0
+
+                if not product_out.empty and not product_out['日期'].isna().all():
+                    days = max(1, (today - product_out['日期'].min()).days)
+                    burn_rate = product_out['數量'].sum() / days
+                else:
+                    burn_rate = 0
+
                 days_remaining = current_stock / burn_rate if burn_rate > 0 else 999
                 suggestion = "立即補貨" if current_stock <= SAFE_STOCK_LEVEL else ("即將缺貨" if days_remaining <= 3 else "安全")
-                report.append({"商品": product, "庫存": current_stock, "日耗": round(burn_rate, 2), "剩餘天數": int(days_remaining) if days_remaining != 999 else "-", "建議": suggestion})
+                report.append({
+                    "商品": product, "庫存": current_stock, "日耗": round(burn_rate, 2),
+                    "剩餘天數": int(days_remaining) if days_remaining != 999 else "-", "建議": suggestion
+                })
 
             df_report = pd.DataFrame(report)
             st.dataframe(df_report, use_container_width=True)
             
-            fig = px.bar(df_report, x="庫存", y="商品", orientation="h", title="📊 各品項當前庫存水位即時統計圖（由大至小排序）", labels={"庫存": "當前庫存數量", "商品": "食材物料名稱"}, text="庫存")
-            fig.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_title="當前庫存數量", yaxis_title="食材物料名稱", height=max(500, len(df_report) * 25), template="plotly_dark")
+            fig = px.bar(df_report, x="庫存", y="商品", orientation="h", title="📊 各品項當前庫存水位即時統計圖", labels={"庫存": "當前庫存數量", "商品": "食材物料名稱"}, text="庫存")
+            fig.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_title="當前庫存數量", yaxis_title="食材物料名稱", margin=dict(l=150, r=50, t=50, b=50), height=max(500, len(df_report) * 25), template="plotly_dark")
             fig.update_traces(texttemplate='%{text}', textposition='outside', marker_color='#2A9D8F')
             st.plotly_chart(fig, use_container_width=True)
-        except Exception as e: st.error(e)
+        except Exception as e: 
+            st.error(e)
 
-# --- TAB2 (📸 AI OCR 單據智慧辨識 - 🛠️ 終極批次打包優化，徹底免除 429 錯誤) ---
+# --- TAB2 (AI OCR 批次優化防 429 版) ---
 with tab2:
     st.header("📸 單據辨識")
-    st.write("💡 上傳紙本單據圖片，AI 將採用『一鍵大批次包裹寫入技術』原地安全入庫，完全防範 HTTP 429 流量超限限制。")
-    uploaded = st.file_uploader("請選擇要上傳的進貨單據圖片：", type=['jpg', 'jpeg', 'png'], key="ocr_uploader")
+    uploaded = st.file_uploader("上傳單據", type=['jpg', 'jpeg', 'png'])
     if uploaded:
-        st.image(uploaded, caption="📸 已成功載入的單據畫面", width=400)
-        if st.button("🚀 啟動 AI 智慧單據辨識", key="ocr_run_execution_btn", use_container_width=True):
-            with st.spinner("🧠 AI 大腦正在進行影像結構化明細擷取..."):
-                try:
-                    img = Image.open(uploaded)
-                    model = genai.GenerativeModel('gemini-3.5-flash')
-                    prompt = '辨識商品與數量，僅輸出 JSON array 格式: [{"product":"高麗菜", "quantity":3}]，不要包含 markdown 標籤包裝'
-                    response = model.generate_content([img, prompt])
-                    
-                    json_match = re.search(r'\[.*\]', response.text, re.S)
-                    if json_match:
-                        items = json.loads(json_match.group())
+        st.image(uploaded)
+        if st.button("開始辨識"):
+            try:
+                img = Image.open(uploaded)
+                model = genai.GenerativeModel('gemini-3.5-flash')
+                prompt = '辨識商品與數量，僅輸出 JSON array 格式: [{"product":"高麗菜", "quantity":3}]'
+                response = model.generate_content([img, prompt])
+                json_match = re.search(r'\[.*\]', response.text, re.S)
+                if json_match:
+                    items = json.loads(json_match.group())
+                    # 🟢 使用 Batch 技術，不再頻繁觸發 update_sheet_stock
+                    doc = connect_spreadsheet()
+                    if doc:
+                        sheet_main = doc.worksheet('工作表1')
+                        headers_main = sheet_main.row_values(1)
+                        import datetime as dt
                         
-                        if not items:
-                            st.warning("⚠️ 圖片辨識完成，但未偵測到任何明細品項。")
-                        else:
-                            # 🟢 核心技術變革：建立批次記憶體緩衝清單，阻斷迴圈重複讀寫 Google API 造成的 429 死結
-                            stock_rows_to_append = []
-                            log_rows_to_append = []
-                            preview_data = []
+                        stock_rows = []
+                        log_rows = []
+                        for item in items:
+                            p_name = item.get('product', '').strip()
+                            qty = float(item.get('quantity', 0))
                             
-                            doc = connect_spreadsheet()
-                            if doc:
-                                sheet_main = doc.worksheet('工作表1')
-                                headers_main = sheet_main.row_values(1)
-                                import datetime as dt
-                                today_str = dt.date.today().strftime("%Y-%m-%d")
-                                
-                                for item in items:
-                                    p_name = item.get('product', '').strip()
-                                    qty = float(item.get('quantity', 0))
-                                    preview_data.append({"商品名稱": p_name, "進貨數量": qty})
-                                    
-                                    # 建立工作表1的列資料
-                                    new_row = [""] * len(headers_main)
-                                    if '商品名稱' in headers_main: new_row[headers_main.index('商品名稱')] = p_name
-                                    if '庫存數量' in headers_main: new_row[headers_main.index('庫存數量')] = qty
-                                    if '有效期限' in headers_main: new_row[headers_main.index('有效期限')] = (dt.date.today() + dt.timedelta(days=7)).strftime("%Y-%m-%d")
-                                    if '最後更新時間' in headers_main: new_row[headers_main.index('最後更新時間')] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                                    if 'ID' in headers_main: new_row[headers_main.index('ID')] = str(uuid.uuid4())[:8]
-                                    stock_rows_to_append.append(new_row)
-                                    
-                                    # 建立進貨紀錄的列資料
-                                    log_rows_to_append.append([datetime.now().strftime('%Y-%m-%d %H:%M:%S'), p_name, qty, "AI OCR 智慧進貨"])
-                                
-                                # 🟢 一鍵大批次塞入（Batch Append）：將多個品項打包在 1 次呼叫完成，API 負荷瞬間降為原來的 1/10！
-                                sheet_main.append_rows(stock_rows_to_append)
-                                doc.worksheet('進貨紀錄').append_rows(log_rows_to_append)
-                                
-                                # 原地定格展示結果
-                                st.markdown("### 📥 AI 智慧批次辨識結果明細")
-                                st.dataframe(pd.DataFrame(preview_data), use_container_width=True)
-                                st.success("🎉 🎉 所有明細已透過 Batch 批次優化技術完成同步寫入，絕無 Quota 衝突！")
-                                st.balloons()
-                                st.cache_data.clear()
-                    else:
-                        st.error(f"解碼失敗，原始回傳內容：{response.text}")
-                except Exception as e: 
-                    st.error(f"OCR 辨識核心異常：{e}")
+                            new_row = [""] * len(headers_main)
+                            if '商品名稱' in headers_main: new_row[headers_main.index('商品名稱')] = p_name
+                            if '庫存數量' in headers_main: new_row[headers_main.index('庫存數量')] = qty
+                            if '有效期限' in headers_main: new_row[headers_main.index('有效期限')] = (dt.date.today() + dt.timedelta(days=7)).strftime("%Y-%m-%d")
+                            if '最後更新時間' in headers_main: new_row[headers_main.index('最後更新時間')] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            if 'ID' in headers_main: new_row[headers_main.index('ID')] = str(uuid.uuid4())[:8]
+                            stock_rows.append(new_row)
+                            log_rows.append([datetime.now().strftime('%Y-%m-%d %H:%M:%S'), p_name, qty, "AI OCR 智慧進貨"])
+                        
+                        sheet_main.append_rows(stock_rows)
+                        doc.worksheet('進貨紀錄').append_rows(log_rows)
+                        st.success("🎉 單據明細已批次寫入雲端資料庫！")
+                        st.balloons()
+                        force_refresh_all_data()
+            except Exception as e: st.error(f"OCR辨識錯誤: {e}")
 
 # --- TAB3 (🎙️ 語音助理) ---
 with tab3:
     st.header("🎙️ 語音輸入")
     st.write("💡 錄音完成並按下停止後，系統將自動進行雙層大腦校正並安全入庫。")
-    st.write("💡 支援指定相對有效期限，例如：「進貨 鮮奶 10瓶 5天」或「進貨 吐司 3包 禮拜五過期」")
+    st.write("💡 支援指定相對有效期限，例如：「進貨 鮮奶 10瓶 5天」")
     audio_file = st.audio_input("錄音控制台")
 
     if audio_file:
         current_audio_bytes = audio_file.getvalue()
-        if st.session_state.get("last_processed_audio") != current_audio_bytes:
+        if st.session_state.get("last_processed_audio") == current_audio_bytes:
+            st.caption("✨ 本次語音已執行完畢。")
+        else:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
                 tmp.write(current_audio_bytes)
                 tmp_path = tmp.name
@@ -748,7 +698,7 @@ with tab3:
                     audio_upload = genai.upload_file(path=tmp_path)
                     model = genai.GenerativeModel('gemini-3.5-flash')
                     all_products = get_all_products()
-                    prompt = "請將這段錄音原封不動地轉錄為繁體中文，修正明顯發音錯字即可。絕對不要自己加上任何說明白話，只輸出最終轉錄純文字。"                    
+                    prompt = "請將這段錄音原封不動地轉錄為繁體中文，修正明顯發音錯字即可。絕對不要自己加上額外的商品提示、說明或備註，只輸出轉錄後的最終純文字句子。"                    
                     response = model.generate_content([audio_upload, prompt])
                     spoken_text = response.text.strip()
                 
@@ -761,74 +711,74 @@ with tab3:
                 try: os.remove(tmp_path)
                 except: pass
 
-# --- TAB4 (🕒 歷史紀錄變更看板 - 完美切換修正完全體) ---
+# --- TAB4 (歷史紀錄精準撤回版) ---
 with tab4:
     st.header("🕒 歷史變更紀錄")
     record_type = st.selectbox("請選擇要管理的紀錄看板：", ["📥 進貨明細管理", "📤 出庫明細管理", "🗑️ 報廢明細管理"])
     
     target_sheet = "進貨紀錄"
-    if "出庫" in record_type: target_sheet = "出庫紀錄"
-    elif "報廢" in record_type: target_sheet = "報廢紀錄"
+    if "出庫" in record_type: 
+        target_sheet = "出庫紀錄"
+    elif "報廢" in record_type: 
+        target_sheet = "報廢紀錄"
 
     try:
-        doc = connect_spreadsheet()
-        if doc:
-            log_sheet = doc.worksheet(target_sheet)
-            current_log_data = log_sheet.get_all_records()
+        current_log_data = fetch_sheet_data_cached(target_sheet)
+        if not current_log_data:
+            st.info(f"目前【{target_sheet}】尚無任何歷史數據。")
+        else:
+            h_col1, h_col2, h_col3, h_col4, h_col5 = st.columns([2, 2, 1, 3, 1.5])
+            with h_col1: st.markdown("**變更日期**")
+            with h_col2: st.markdown("**商品名稱**")
+            with h_col3: st.markdown("**變更數量**")
+            with h_col4: st.markdown("**備註說明**")
+            with h_col5: st.markdown("**安全性操作**")
+            st.markdown("---")
             
-            if not current_log_data:
-                st.info(f"目前【{target_sheet}】尚無任何歷史數據。")
-            else:
-                h_col1, h_col2, h_col3, h_col4, h_col5 = st.columns([2, 2, 1, 3, 1.5])
-                with h_col1: st.markdown("**變更日期**")
-                with h_col2: st.markdown("**商品名稱**")
-                with h_col3: st.markdown("**變更數量**")
-                with h_col4: st.markdown("**備註說明**")
-                with h_col5: st.markdown("**安全性操作**")
-                st.markdown("---")
+            for idx, row in reversed(list(enumerate(current_log_data))):
+                actual_row_in_sheet = idx + 2
+                r_col1, r_col2, r_col3, r_col4, r_col5 = st.columns([2, 2, 1, 3, 1.5])
                 
-                for idx, row in reversed(list(enumerate(current_log_data))):
-                    actual_row_in_sheet = idx + 2
-                    r_col1, r_col2, r_col3, r_col4, r_col5 = st.columns([2, 2, 1, 3, 1.5])
-                    
-                    with r_col1: st.write(row.get("日期", row.get("時間", "-")))
-                    with r_col2: st.write(f"**{row.get('商品名稱', '-')}**")
-                    with r_col3: st.write(str(row.get("數量", row.get("數量(片/個)", "-"))))
-                    with r_col4: st.write(row.get("備註", row.get("備註說明", "一般語音/系統")))
-                    
-                    with r_col5:
-                        btn_key = f"undo_{target_sheet}_{actual_row_in_sheet}_{idx}"
-                        if st.button("🗑️ 撤回", key=btn_key, use_container_width=True):
-                            p_name = row.get('商品名稱')
-                            qty = float(extract_number(row.get('數量', row.get('數量(片/個)', 0))))
+                with r_col1: st.write(row.get("日期", row.get("時間", "-")))
+                with r_col2: st.write(f"**{row.get('商品名稱', '-')}**")
+                with r_col3: st.write(str(row.get("數量", row.get("數量(片/個)", "-"))))
+                with r_col4: st.write(row.get("備註", row.get("備註說明", "一般語音/系統")))
+                
+                with r_col5:
+                    btn_key = f"undo_{target_sheet}_{actual_row_in_sheet}_{idx}"
+                    if st.button("🗑️ 撤回", key=btn_key, use_container_width=True):
+                        p_name = row.get('商品名稱')
+                        try: qty = float(extract_number(row.get('數量', row.get('數量(片/個)', 0))))
+                        except: qty = 0.0
 
-                            with st.spinner("正在執行還原..."):
-                                is_safe_to_undo = True
-                                
-                                if target_sheet == "進貨紀錄":
-                                    try:
-                                        df_current_stock = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
-                                        df_current_stock['庫存數量'] = df_current_stock['庫存數量'].apply(extract_number)
-                                        match_stock = df_current_stock[df_current_stock['商品名稱'] == p_name]
-                                        current_qty = float(match_stock['庫存數量'].sum()) if not match_stock.empty else 0.0
-                                        
-                                        if current_qty < qty:
-                                            st.warning(f"⚠️ 偵測到後台庫存已變動，目前【{p_name}】帳面剩餘 {current_qty}，不足以執行反向扣除。")
-                                            st.info("🔄 系統啟動防禦機制：免除庫存反向追溯，直接強制抹除此筆歷史紀錄。")
-                                            log_sheet.delete_rows(actual_row_in_sheet)
-                                            is_safe_to_undo = False
-                                            time.sleep(1)
-                                            st.cache_data.clear()
-                                            st.rerun()
-                                    except Exception as check_err: st.error(f"安全性檢查失敗: {check_err}")
-
-                                if is_safe_to_undo:
-                                    if delete_and_undo_specific_record(target_sheet, actual_row_in_sheet, p_name, qty):
+                        with st.spinner("正在執行還原..."):
+                            is_safe_to_undo = True
+                            if target_sheet == "進貨紀錄":
+                                try:
+                                    df_current_stock = pd.DataFrame(fetch_sheet_data_cached('工作表1'))
+                                    df_current_stock['庫存數量'] = df_current_stock['庫存數量'].apply(extract_number)
+                                    match_stock = df_current_stock[df_current_stock['商品名稱'] == p_name]
+                                    current_qty = float(match_stock['庫存數量'].sum()) if not match_stock.empty else 0.0
+                                    
+                                    if current_qty < qty:
+                                        st.warning(f"⚠️ 庫存變動防禦：【{p_name}】目前庫存不足以反向扣除，強制抹除此歷史紀錄。")
+                                        doc = connect_spreadsheet()
+                                        if doc: doc.worksheet(target_sheet).delete_rows(actual_row_in_sheet)
+                                        is_safe_to_undo = False
+                                        time.sleep(1)
+                                        force_refresh_all_data()
                                         st.rerun()
-                    st.markdown("<hr style='margin:2px 0px; opacity:0.3;'>", unsafe_allow_html=True)
-    except Exception as log_err: st.error(f"讀取失敗：{log_err}")
+                                except Exception as check_err: st.error(f"安全性檢查失敗: {check_err}")
 
-# --- TAB5 (🍔 POS 出餐與後台管理配置 - 100% 恢復一字不漏) ---
+                            if is_safe_to_undo:
+                                if delete_and_undo_specific_record(target_sheet, actual_row_in_sheet, p_name, qty):
+                                    time.sleep(1)
+                                    st.rerun()
+                st.markdown("<hr style='margin:2px 0px; opacity:0.3;'>", unsafe_allow_html=True)
+    except Exception as log_err: 
+        st.error(f"讀取失敗：{log_err}")
+
+# --- TAB5 (POS 出餐與後台配置) ---
 with tab5:
     st.header("🍔 POS 前台出餐與後台管理")
     setup_col, pos_col = st.columns([1, 1.2])
@@ -909,24 +859,28 @@ with tab5:
                 meal_price_show = st.session_state.meal_prices.get(meal_name, 0.0)
                 st.markdown(f"**{meal_name}** — 💰售價: `${meal_price_show}` 元")
                 st.caption(f"配方：" + " / ".join([f"{k}:{v}" for k, v in ingredients.items()]))
+                
+                # 🟢 修復：將 except continue 語法錯誤改為安全的錯誤拋出
                 if st.button("🛒 賣出一份", key=f"pos_btn_{meal_name}", use_container_width=True):
                     try:
-                        records = doc.worksheet('工作表1').get_all_records()
+                        records = fetch_sheet_data_cached('工作表1')
                         total_stock_map = {}
                         for rec in records: 
                             total_stock_map[str(rec.get('商品名稱'))] = total_stock_map.get(str(rec.get('商品名稱')), 0.0) + float(extract_number(rec.get('庫存數量', 0)))
-                    except: continue
-                    
-                    insufficient = [f"❌ 【{k}】還差 {v - total_stock_map.get(k, 0.0)} 個" for k, v in ingredients.items() if total_stock_map.get(k, 0.0) < v]
-                    if insufficient: st.error(f"🚨 原料不足：{', '.join(insufficient)}")
-                    else:
-                        for item_name, qty in ingredients.items(): 
-                            update_sheet_stock(item_name, qty, 'OUT', detail_info=f"POS出餐：{meal_name}")
-                        price = st.session_state.meal_prices.get(meal_name, 0.0)
-                        cost = sum(qty * st.session_state.ingredient_costs.get(ing_name, 0.0) for ing_name, qty in ingredients.items())
-                        st.success(f"✅ {meal_name} 出餐成功！")
-                        c1, c2, c3 = st.columns(3)
-                        c1.metric("售價", f"${price}")
-                        c2.metric("成本", f"${round(cost, 1)}")
-                        c3.metric("本單毛利", f"${round(price - cost, 1)}")
-                        st.balloons()
+                        
+                        insufficient = [f"❌ 【{k}】還差 {v - total_stock_map.get(k, 0.0)} 個" for k, v in ingredients.items() if total_stock_map.get(k, 0.0) < v]
+                        if insufficient: 
+                            st.error(f"🚨 原料不足：{', '.join(insufficient)}")
+                        else:
+                            for item_name, qty in ingredients.items(): 
+                                update_sheet_stock(item_name, qty, 'OUT', detail_info=f"POS出餐：{meal_name}")
+                            price = st.session_state.meal_prices.get(meal_name, 0.0)
+                            cost = sum(qty * st.session_state.ingredient_costs.get(ing_name, 0.0) for ing_name, qty in ingredients.items())
+                            st.success(f"✅ {meal_name} 出餐成功！")
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric("售價", f"${price}")
+                            c2.metric("成本", f"${round(cost, 1)}")
+                            c3.metric("本單毛利", f"${round(price - cost, 1)}")
+                            st.balloons()
+                    except Exception as e:
+                        st.error(f"出餐扣帳發生異常: {e}")
