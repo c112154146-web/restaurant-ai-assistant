@@ -178,7 +178,7 @@ def ai_chat_mode():
             3. 成品餐點與物料食譜 (BOM 表)：{dict(st.session_state.menu_recipes)}
             """
             
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-3.5-flash')
             
             # 🟢 核心修正 2：重塑 Prompt，鎖死限制令，逼 AI 進入專業經營診斷角色
             prompt = f"""
@@ -221,7 +221,7 @@ def ai_purchase_suggestion():
         3. 成品餐點與物料食譜 (BOM 表)：{dict(st.session_state.menu_recipes)}
         """
         
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3.5-flash')
         
         prompt = f"""
         你是餐廳採購與智慧經營診斷 AI 專家。
@@ -472,7 +472,7 @@ def smart_parse_and_execute(text):
     cleaned_command = ""
     for attempt in range(3):
         try:
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-3.5-flash')
             response = model.generate_content([nlp_prompt, text])
             cleaned_command = response.text.strip()
             break
@@ -561,7 +561,7 @@ with tab1:
             st.info("目前尚無出庫紀錄，系統將自動模擬基本採購模型：")
         
         with st.spinner("AI 正在分析歷史銷售趨勢與耗速模型..."):
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-3.5-flash')
             
             # 💡 優化後的 Prompt：下死命令叫 AI 閉嘴，直接噴表格！
             prompt = f"""你是餐廳供應鏈專家。
@@ -594,7 +594,7 @@ with tab1:
         st.markdown("---")
         st.subheader("🕵️‍♂️ 系統自動化稽核與異常偵測告警")
         with st.spinner("安全稽核大腦掃描中..."):
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-3.5-flash')
             prompt = f"你是餐廳內控專家。目前系統時間為：{current_date_str}。目目前庫存：\n{df_stock_raw.to_string()}\n報廢紀錄：\n{df_waste_raw.tail(50).to_string()}\n請找出潛在異常黑洞，繁體中文回答。"
             try:
                 st.warning(model.generate_content(prompt).text)
@@ -693,7 +693,7 @@ with tab1:
             # =========================================================
             # 🧠後半段：將 Python 算好的完美數字丢給 Gemini，AI 只負責「邏輯推論與診斷」
             # =========================================================
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-3.5-flash')
             
             ai_prompt = f"""
             你是餐廳財務顧問。
@@ -807,7 +807,7 @@ with tab2:
         if st.button("開始辨識"):
             try:
                 img = Image.open(uploaded)
-                model = genai.GenerativeModel('gemini-2.5-flash')
+                model = genai.GenerativeModel('gemini-3.5-flash')
                 prompt = '辨識商品與數量，僅輸出 JSON array 格式: [{"product":"高麗菜", "quantity":3}]'
                 response = model.generate_content([img, prompt])
                 json_match = re.search(r'\[.*\]', response.text, re.S)
@@ -836,7 +836,7 @@ with tab3:
             try:
                 with st.spinner("🎵 語音傳輸中，正在進行精準 STT 字詞轉錄..."):
                     audio_upload = genai.upload_file(path=tmp_path)
-                    model = genai.GenerativeModel('gemini-2.5-flash')
+                    model = genai.GenerativeModel('gemini-3.5-flash')
                     all_products = get_all_products()
                     prompt = "請將這段錄音原封不動地轉錄為繁體中文，修正明顯發音錯字即可。絕對不要自己加上額外的商品提示、說明或備註，只輸出轉錄後的最終純文字句子。"                    
                     response = model.generate_content([audio_upload, prompt])
