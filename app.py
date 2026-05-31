@@ -97,9 +97,16 @@ def connect_spreadsheet():
         return None
 @st.cache_data(ttl=60)
 def fetch_sheet_data_cached(sheet_name):
-    doc = connect_spreadsheet()
-    if doc:
-        return doc.worksheet(sheet_name).get_all_records()
+    try:
+        doc = connect_spreadsheet()
+        if doc:
+            return doc.worksheet(sheet_name).get_all_records()
+    except gspread.exceptions.APIError as api_err:
+        # 🟢 如果真的是用量過大或分頁找不到，用黃色警告頂住，網頁其他部分（如POS、AI選單）依然可以點擊，不會直接死機
+        st.warning(f"⚠️ Google Sheets API 讀取【{sheet_name}】暫時受阻，可能是短時間內呼叫太頻繁或分頁名稱不符。")
+        st.caption("💡 提示：請檢查試算表分頁名稱是否確實為『工作表1』，並稍等幾秒讓 Quota 恢復。")
+    except Exception as e:
+        st.error(f"其他讀取錯誤：{e}")
     return []
 
 # =========================================================
