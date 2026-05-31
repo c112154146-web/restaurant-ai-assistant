@@ -122,7 +122,7 @@ def fetch_sheet_data_cached(sheet_name):
 
 # 建立一個安全的資料刷新器（只在進出庫、撤回等真正需要變更資料時才強制刷新）
 def force_refresh_all_data():
-    st.cache_data.clear()  # 只有在必要時才清空快取
+    force_refresh_all_data()  # 只有在必要時才清空快取
     try:
         doc = connect_spreadsheet()
         if doc:
@@ -399,7 +399,7 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
                 if not is_undo:
                     st.error(f"報廢成功：{product_name} -{quantity}")
                     st.session_state.last_transaction = {"action": "WASTE", "product": product_name, "quantity": quantity}
-        st.cache_data.clear()
+        force_refresh_all_data()
     except Exception as e: st.error(f"系統更新失敗：{e}")
 
 def undo_last_transaction():
@@ -412,7 +412,7 @@ def undo_last_transaction():
         update_sheet_stock(product_name=last['product'], quantity=last['quantity'], action='IN', detail_info="操作撤回：補回錯誤扣帳", is_undo=True)
     st.success("🎉 已成功還原庫存！")
     st.session_state.last_transaction = None
-    st.cache_data.clear()
+    force_refresh_all_data()
     st.rerun()
 
 def delete_and_undo_specific_record(sheet_name, row_index, product_name, quantity):
@@ -453,7 +453,7 @@ def delete_and_undo_specific_record(sheet_name, row_index, product_name, quantit
         log_sheet = doc.worksheet(sheet_name)
         log_sheet.delete_rows(row_index)
         
-        st.cache_data.clear()
+        force_refresh_all_data()
         st.success(f"🎉 成功同步撤回！已從【{sheet_name}】刪除該紀錄，並完成庫存【{action_text}】修正。")
         return True
     except Exception as e:
