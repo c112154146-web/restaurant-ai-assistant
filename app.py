@@ -742,17 +742,30 @@ with tab2:
     uploaded = st.file_uploader("上傳單據", type=['jpg', 'jpeg', 'png'])
     if uploaded:
         st.image(uploaded)
-        if st.button("開始辨識"):
-            try:
-                img = Image.open(uploaded)
-                model = genai.GenerativeModel('gemini-3.5-flash')
-                prompt = '辨識商品與數量，僅輸出 JSON array 格式: [{"product":"高麗菜", "quantity":3}]'
-                response = model.generate_content([img, prompt])
-                json_match = re.search(r'\[.*\]', response.text, re.S)
-                if json_match:
-                    items = json.loads(json_match.group())
-                    for item in items: update_sheet_stock(item['product'], item['quantity'], 'IN', detail_info='AI OCR')
-            except Exception as e: st.error(e)
+        if st.button("開始辨識", key="ocr_start_btn"):
+            with st.spinner("AI 正在深度掃描進貨單據與結構化解析..."):
+                try:
+                    img = Image.open(uploaded)
+                    model = genai.GenerativeModel('gemini-3.5-flash')
+                    prompt = '辨識商品與數量，僅輸出 JSON array 格式: [{"product":"高麗菜", "quantity":3}]'
+                    response = model.generate_content([img, prompt])
+                    
+                    json_match = re.search(r'\[.*\]', response.text, re.S)
+                    if json_match:
+                        items = json.loads(json_match.group())
+                        for item in items: 
+                            update_sheet_stock(item['product'], item['quantity'], 'IN', detail_info='AI OCR')
+                        
+                        # 🟢 核心修正：入庫成功後，立刻斬斷快取、噴氣球、強制刷新頁面！
+                        st.success("🎉 單據影像智慧辨識成功，已將明細全數安全入庫！")
+                        st.balloons()
+                        time.sleep(1)
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error("AI 辨識出的文字未符合標準 JSON 格式，請重新拍攝或確認單據清晰度。")
+                except Exception as e: 
+                    st.error(f"OCR 辨識核心異常：{e}")
 
 # --- TAB3 (🎙️ 語音助理) ---
 with tab3:
