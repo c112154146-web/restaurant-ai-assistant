@@ -95,19 +95,43 @@ def connect_spreadsheet():
     except Exception as e:
         st.error(f"連線失敗：{e}")
         return None
-@st.cache_data(ttl=60)
+# =========================================================
+# 🟢 終極優化：全域資料快取與 API 429 防禦機制
+# =========================================================
+@st.cache_data(ttl=60)  # 📊 鎖定 60 秒存活期，一分鐘內不管重新整理幾次，都只會向 Google 讀取 1 次！
 def fetch_sheet_data_cached(sheet_name):
     try:
+        # 在快取未過期前，優先直連
         doc = connect_spreadsheet()
         if doc:
             return doc.worksheet(sheet_name).get_all_records()
     except gspread.exceptions.APIError as api_err:
-        # 🟢 如果真的是用量過大或分頁找不到，用黃色警告頂住，網頁其他部分（如POS、AI選單）依然可以點擊，不會直接死機
-        st.warning(f"⚠️ Google Sheets API 讀取【{sheet_name}】暫時受阻，可能是短時間內呼叫太頻繁或分頁名稱不符。")
-        st.caption("💡 提示：請檢查試算表分頁名稱是否確實為『工作表1』，並稍等幾秒讓 Quota 恢復。")
+        if "429" in str(api_err):
+            # 🚨 核心防禦：當偵測到 429 超限時，自動啟動 Session State 後備記憶體，防止系統黑畫面崩潰
+            st.warning(f"⚠️ Google 流量超限 (429)！系統已自動啟動【本機記憶體防禦機制】繼續運作。")
+            
+            # 如果本機抽屜裡有之前讀成功的舊資料，就拿出來頂替，讓使用者完全沒感覺斷線
+            backup_key = f"backup_data_{sheet_name}"
+            if backup_key in st.session_state:
+                return st.session_state[backup_key]
+        else:
+            st.error(f"Google API 異常：{api_err}")
     except Exception as e:
-        st.error(f"其他讀取錯誤：{e}")
+        st.error(f"系統讀取失敗：{e}")
     return []
+
+# 建立一個安全的資料刷新器（只在進出庫、撤回等真正需要變更資料時才強制刷新）
+def force_refresh_all_data():
+    st.cache_data.clear()  # 只有在必要時才清空快取
+    try:
+        doc = connect_spreadsheet()
+        if doc:
+            # 默默把最新資料備份到本機抽屜裡
+            for name in ['工作表1', '進貨紀錄', '出庫紀錄', '報廢紀錄']:
+                data = doc.worksheet(name).get_all_records()
+                st.session_state[f"backup_data_{name}"] = data
+    except:
+        pass
 
 # =========================================================
 # 3. 工具函式與 KPI
