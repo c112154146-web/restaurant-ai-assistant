@@ -6,14 +6,15 @@ import re
 import uuid
 import cn2an
 import google.generativeai as genai
-import tempfile
-import os
+import tempfile  # 用來處理暫存錄音檔
+import os        # 用來刪除暫存檔
 import time
 import plotly.express as px
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 from PIL import Image
 from rapidfuzz import process, fuzz
+from oauth2client.service_account import ServiceAccountCredentials
 
 st.set_page_config(
     page_title="AI 智慧倉儲系統",
@@ -39,7 +40,7 @@ if "menu_recipes" not in st.session_state:
         "🍳 起司蛋餅": {"蛋餅皮": 1.0, "雞蛋": 1.0, "起司片": 1.0},
         "🥓 培根蛋吐司": {"吐司": 2.0, "雞蛋": 1.0, "培根": 2.0, "美乃滋": 0.02},
         "🍗 卡拉雞腿堡": {"漢堡麵包": 1.0, "卡拉雞腿排": 1.0, "美生菜": 0.1, "美乃滋": 0.05},
-        "🍟 歡樂炸物拼盤": {"薯條": 0.5, "雞塊": 5.0, "熱狗": 2.0, "番茄醬": 0.1},
+        "🍟 歡রাপ炸物拼盤": {"薯條": 0.5, "雞塊": 5.0, "熱狗": 2.0, "番茄醬": 0.1},
         "🥛 經典鮮奶茶": {"紅茶葉": 0.1, "鮮奶": 0.2, "砂糖": 0.02, "冰塊": 0.5},
         "☕ 美式黑咖啡": {"咖啡豆": 0.05, "冰塊": 0.5}
     }
@@ -68,6 +69,10 @@ if "last_transaction" not in st.session_state:
 if "last_processed_audio" not in st.session_state:
     st.session_state.last_processed_audio = None
 
+# 🟢 新增：單據辨識預覽區的專屬記憶體
+if "ocr_preview" not in st.session_state:
+    st.session_state.ocr_preview = None
+
 # =========================================================
 # 2. Google Sheets 連線
 # =========================================================
@@ -86,7 +91,7 @@ def connect_spreadsheet():
         return None
 
 # =========================================================
-# 🟢 終極優化：全域資料快取與 API 429 防禦機制
+# 🟢 全域資料快取與 API 429 防禦機制
 # =========================================================
 @st.cache_data(ttl=60)
 def fetch_sheet_data_cached(sheet_name):
@@ -98,7 +103,7 @@ def fetch_sheet_data_cached(sheet_name):
             return data
     except gspread.exceptions.APIError as api_err:
         if "429" in str(api_err):
-            st.warning(f"⚠️ Google 流量超限 (429)！系統已自動啟動【本機記憶體防禦機制】繼續運作。")
+            st.warning(f"⚠️ Google 流量超限 (429)！系統已自動切換至【本機記憶體防禦機制】。")
             backup_key = f"backup_data_{sheet_name}"
             if backup_key in st.session_state:
                 return st.session_state[backup_key]
@@ -107,17 +112,6 @@ def fetch_sheet_data_cached(sheet_name):
     except Exception as e:
         st.error(f"系統讀取失敗：{e}")
     return []
-
-# 建立一個安全的資料刷新器（修復 RecursionError）
-def force_refresh_all_data():
-    fetch_sheet_data_cached.clear()
-    try:
-        doc = connect_spreadsheet()
-        if doc:
-            for name in ['工作表1', '進貨紀錄', '出庫紀錄', '報廢紀錄']:
-                st.session_state[f"backup_data_{name}"] = doc.worksheet(name).get_all_records()
-    except Exception:
-        pass
 
 # =========================================================
 # 3. 工具函式與 KPI
@@ -343,7 +337,8 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
                     st.error(f"報廢成功：{product_name} -{quantity}")
                     st.session_state.last_transaction = {"action": "WASTE", "product": product_name, "quantity": quantity}
         
-        force_refresh_all_data()
+        st.cache_data.clear()
+        st.rerun()
     except Exception as e: st.error(f"系統更新失敗：{e}")
 
 def undo_last_transaction():
@@ -356,7 +351,7 @@ def undo_last_transaction():
         update_sheet_stock(product_name=last['product'], quantity=last['quantity'], action='IN', detail_info="操作撤回：補回錯誤扣帳", is_undo=True)
     st.success("🎉 已成功還原庫存！")
     st.session_state.last_transaction = None
-    force_refresh_all_data()
+    st.cache_data.clear()
     st.rerun()
 
 def delete_and_undo_specific_record(sheet_name, row_index, product_name, quantity):
@@ -397,7 +392,7 @@ def delete_and_undo_specific_record(sheet_name, row_index, product_name, quantit
         log_sheet = doc.worksheet(sheet_name)
         log_sheet.delete_rows(row_index)
         
-        force_refresh_all_data()
+        st.cache_data.clear()
         st.success(f"🎉 成功同步撤回！已從【{sheet_name}】刪除該紀錄，並完成庫存【{action_text}】修正。")
         return True
     except Exception as e:
@@ -507,7 +502,7 @@ with tab1:
 
     if run_prediction and not df_stock_raw.empty:
         st.markdown("---")
-        st.subheader("🔮 未來 7 天物料需求預測與自動採購單")
+        st.subheader("🔮 未來 7 天物料需求預測與自動採採購單")
         if df_out_raw.empty:
             st.info("目前尚無出庫紀錄，系統將自動模擬基本採購模型：")
         
@@ -633,49 +628,96 @@ with tab1:
         except Exception as e: 
             st.error(e)
 
-# --- TAB2 (AI OCR 批次優化防 429 版) ---
+# --- TAB2 (📸 AI OCR 單據智慧辨識 - 🛠️ 兩階段預覽與編輯確認) ---
 with tab2:
     st.header("📸 單據辨識")
-    uploaded = st.file_uploader("上傳單據", type=['jpg', 'jpeg', 'png'])
+    st.write("💡 上傳紙本進貨單據圖片，AI 將進行辨識。您可以先預覽並修改內容，確認無誤後再一鍵批次入庫。")
+    
+    uploaded = st.file_uploader("請選擇要上傳的進貨單據圖片：", type=['jpg', 'jpeg', 'png'], key="ocr_uploader")
+    
+    if not uploaded and st.session_state.ocr_preview is not None:
+        st.session_state.ocr_preview = None
+        
     if uploaded:
-        st.image(uploaded)
-        if st.button("開始辨識"):
-            try:
-                img = Image.open(uploaded)
-                model = genai.GenerativeModel('gemini-3.5-flash')
-                prompt = '辨識商品與數量，僅輸出 JSON array 格式: [{"product":"高麗菜", "quantity":3}]'
-                response = model.generate_content([img, prompt])
-                json_match = re.search(r'\[.*\]', response.text, re.S)
-                if json_match:
-                    items = json.loads(json_match.group())
-                    # 🟢 使用 Batch 技術，不再頻繁觸發 update_sheet_stock
+        st.image(uploaded, caption="📸 已成功載入的單據畫面", width=400)
+        
+        if st.button("🚀 啟動 AI 智慧單據辨識", key="ocr_run_execution_btn", use_container_width=True):
+            with st.spinner("🧠 AI 大腦正在進行影像結構化明細擷取..."):
+                try:
+                    img = Image.open(uploaded)
+                    model = genai.GenerativeModel('gemini-3.5-flash')
+                    prompt = '辨識商品與數量，僅輸出 JSON array 格式: [{"product":"高麗菜", "quantity":3}]，不要包含 markdown 標籤包裝'
+                    response = model.generate_content([img, prompt])
+                    
+                    json_match = re.search(r'\[.*\]', response.text, re.S)
+                    if json_match:
+                        items = json.loads(json_match.group())
+                        if not items:
+                            st.warning("⚠️ 圖片辨識完成，但未偵測到任何明細品項。")
+                        else:
+                            # 🟢 成功辨識後，先存入 session_state 供使用者編輯確認
+                            st.session_state.ocr_preview = items
+                    else:
+                        st.error(f"解碼失敗，原始回傳內容：{response.text}")
+                except Exception as e: 
+                    st.error(f"OCR 辨識核心異常：{e}")
+        
+        if st.session_state.ocr_preview is not None:
+            st.markdown("### 📥 辨識結果預覽 (可直接點擊表格修改錯誤)")
+            
+            preview_data = []
+            for item in st.session_state.ocr_preview:
+                p_name = item.get('product', '').strip()
+                qty = float(item.get('quantity', 0))
+                preview_data.append({"商品名稱": p_name, "進貨數量": qty})
+                
+            # 🟢 使用 st.data_editor 讓使用者能直接在網頁上修改 AI 辨識出的資料
+            edited_df = st.data_editor(pd.DataFrame(preview_data), num_rows="dynamic", use_container_width=True, key="ocr_data_editor")
+            
+            if st.button("✅ 確認明細無誤，一鍵批次寫入資料庫", type="primary", use_container_width=True):
+                with st.spinner("正在安全寫入雲端資料庫..."):
                     doc = connect_spreadsheet()
                     if doc:
                         sheet_main = doc.worksheet('工作表1')
                         headers_main = sheet_main.row_values(1)
                         import datetime as dt
+                        today_str = dt.date.today().strftime("%Y-%m-%d")
                         
-                        stock_rows = []
-                        log_rows = []
-                        for item in items:
-                            p_name = item.get('product', '').strip()
-                            qty = float(item.get('quantity', 0))
-                            
+                        stock_rows_to_append = []
+                        log_rows_to_append = []
+                        
+                        for index, row in edited_df.iterrows():
+                            p_name = str(row["商品名稱"]).strip()
+                            try:
+                                qty = float(row["進貨數量"])
+                            except:
+                                qty = 0.0
+                                
+                            if not p_name or qty <= 0:
+                                continue
+                                
                             new_row = [""] * len(headers_main)
                             if '商品名稱' in headers_main: new_row[headers_main.index('商品名稱')] = p_name
                             if '庫存數量' in headers_main: new_row[headers_main.index('庫存數量')] = qty
                             if '有效期限' in headers_main: new_row[headers_main.index('有效期限')] = (dt.date.today() + dt.timedelta(days=7)).strftime("%Y-%m-%d")
                             if '最後更新時間' in headers_main: new_row[headers_main.index('最後更新時間')] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                             if 'ID' in headers_main: new_row[headers_main.index('ID')] = str(uuid.uuid4())[:8]
-                            stock_rows.append(new_row)
-                            log_rows.append([datetime.now().strftime('%Y-%m-%d %H:%M:%S'), p_name, qty, "AI OCR 智慧進貨"])
+                            stock_rows_to_append.append(new_row)
+                            
+                            log_rows_to_append.append([datetime.now().strftime('%Y-%m-%d %H:%M:%S'), p_name, qty, "AI OCR 智慧進貨"])
                         
-                        sheet_main.append_rows(stock_rows)
-                        doc.worksheet('進貨紀錄').append_rows(log_rows)
-                        st.success("🎉 單據明細已批次寫入雲端資料庫！")
-                        st.balloons()
-                        force_refresh_all_data()
-            except Exception as e: st.error(f"OCR辨識錯誤: {e}")
+                        if stock_rows_to_append:
+                            sheet_main.append_rows(stock_rows_to_append)
+                            doc.worksheet('進貨紀錄').append_rows(log_rows_to_append)
+                            
+                            st.session_state.ocr_preview = None 
+                            st.success("🎉 所有明細已透過 Batch 批次優化技術完成同步寫入！")
+                            st.balloons()
+                            st.cache_data.clear()
+                            time.sleep(1.5)
+                            st.rerun() 
+                        else:
+                            st.error("沒有有效資料可寫入。")
 
 # --- TAB3 (🎙️ 語音助理) ---
 with tab3:
@@ -766,7 +808,7 @@ with tab4:
                                         if doc: doc.worksheet(target_sheet).delete_rows(actual_row_in_sheet)
                                         is_safe_to_undo = False
                                         time.sleep(1)
-                                        force_refresh_all_data()
+                                        st.cache_data.clear()
                                         st.rerun()
                                 except Exception as check_err: st.error(f"安全性檢查失敗: {check_err}")
 
@@ -860,7 +902,6 @@ with tab5:
                 st.markdown(f"**{meal_name}** — 💰售價: `${meal_price_show}` 元")
                 st.caption(f"配方：" + " / ".join([f"{k}:{v}" for k, v in ingredients.items()]))
                 
-                # 🟢 修復：將 except continue 語法錯誤改為安全的錯誤拋出
                 if st.button("🛒 賣出一份", key=f"pos_btn_{meal_name}", use_container_width=True):
                     try:
                         records = fetch_sheet_data_cached('工作表1')
