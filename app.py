@@ -70,68 +70,47 @@ if "last_processed_audio" not in st.session_state:
     st.session_state.last_processed_audio = None
 
 # =========================================================
-# 2. Google Sheets 連線 (配合你最新的 Secrets 欄位完美解碼版)
+# 2. Google Sheets 連線 (金鑰字典直接加載授權)
 # =========================================================
 @st.cache_resource
 def connect_spreadsheet():
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     try:
-        # 1. 強行內部加載，防止快取死鎖
         from google.oauth2.service_account import Credentials
         import json
-        
-        # 2. 🟢 關鍵對齊：精準抓取你 Secrets 裡設定的 [gcp_service_account] 底下的 credentials 文字
         raw_json_str = st.secrets["gcp_service_account"]["credentials"]
-        
-        # 3. 強行將這段 JSON 純文字解碼還原成 Python 認得的金鑰字典物件
         creds_dict = json.loads(raw_json_str)
-        
-        # 4. 使用 Info 方式進行字典授權連線 (免檔案路徑！)
         creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
         client = gspread.authorize(creds)
-        
         doc = client.open("餐廳倉儲助手")
         return doc
     except Exception as e:
         st.error(f"連線失敗：{e}")
         return None
+
 # =========================================================
-# 🟢 終極優化：全域資料快取與 API 429 防禦機制
+# 🟢 終極優化：全域資料快取與 API 429 流量超限記憶體防禦機制
 # =========================================================
-@st.cache_data(ttl=60)  # 📊 鎖定 60 秒存活期，一分鐘內不管重新整理幾次，都只會向 Google 讀取 1 次！
+@st.cache_data(ttl=60)  
 def fetch_sheet_data_cached(sheet_name):
     try:
-        # 在快取未過期前，優先直連
         doc = connect_spreadsheet()
         if doc:
-            return doc.worksheet(sheet_name).get_all_records()
+            records = doc.worksheet(sheet_name).get_all_records()
+            # 默默將讀取成功的最新紀錄備份至 session_state 當中，防禦 429 突發封鎖
+            st.session_state[f"backup_data_{sheet_name}"] = records
+            return records
     except gspread.exceptions.APIError as api_err:
         if "429" in str(api_err):
-            # 🚨 核心防禦：當偵測到 429 超限時，自動啟動 Session State 後備記憶體，防止系統黑畫面崩潰
             st.warning(f"⚠️ Google 流量超限 (429)！系統已自動啟動【本機記憶體防禦機制】繼續運作。")
-            
-            # 如果本機抽屜裡有之前讀成功的舊資料，就拿出來頂替，讓使用者完全沒感覺斷線
             backup_key = f"backup_data_{sheet_name}"
             if backup_key in st.session_state:
                 return st.session_state[backup_key]
         else:
-            st.error(f"Google API 異常：{api_err}")
+            st.error(f"Google Sheets API 讀取【{sheet_name}】受阻，請檢查分頁名稱是否確實對齊！")
     except Exception as e:
         st.error(f"系統讀取失敗：{e}")
     return []
-
-# 建立一個安全的資料刷新器（只在進出庫、撤回等真正需要變更資料時才強制刷新）
-def force_refresh_all_data():
-    force_refresh_all_data()  # 只有在必要時才清空快取
-    try:
-        doc = connect_spreadsheet()
-        if doc:
-            # 默默把最新資料備份到本機抽屜裡
-            for name in ['工作表1', '進貨紀錄', '出庫紀錄', '報廢紀錄']:
-                data = doc.worksheet(name).get_all_records()
-                st.session_state[f"backup_data_{name}"] = data
-    except:
-        pass
 
 # =========================================================
 # 3. 工具函式與 KPI
@@ -143,7 +122,7 @@ def show_kpi_dashboard():
 
     today = datetime.now().strftime('%Y-%m-%d')
     today_in = len(df_in[df_in['日期'].astype(str).str.contains(today)]) if not df_in.empty else 0
-    today_waste = len(df_waste[df_waste['日期'].astype(str).str.contains(today)]) if not df_waste.empty else 0
+    today_waste = len(df_waste[df_waste['報廢紀錄' if '報廢紀錄' in df_waste.columns else df_waste.columns[0]].astype(str).str.contains(today)]) if not df_waste.empty else 0
 
     low_stock = 0
     expiry_count = 0
@@ -399,7 +378,10 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
                 if not is_undo:
                     st.error(f"報廢成功：{product_name} -{quantity}")
                     st.session_state.last_transaction = {"action": "WASTE", "product": product_name, "quantity": quantity}
-        force_refresh_all_data()
+        
+        # 🟢 安全變更機制：直接清空資料快取，全頁乾淨刷新，絕不引爆遞迴
+        st.cache_data.clear()
+        st.rerun()
     except Exception as e: st.error(f"系統更新失敗：{e}")
 
 def undo_last_transaction():
@@ -412,7 +394,7 @@ def undo_last_transaction():
         update_sheet_stock(product_name=last['product'], quantity=last['quantity'], action='IN', detail_info="操作撤回：補回錯誤扣帳", is_undo=True)
     st.success("🎉 已成功還原庫存！")
     st.session_state.last_transaction = None
-    force_refresh_all_data()
+    st.cache_data.clear()
     st.rerun()
 
 def delete_and_undo_specific_record(sheet_name, row_index, product_name, quantity):
@@ -453,7 +435,7 @@ def delete_and_undo_specific_record(sheet_name, row_index, product_name, quantit
         log_sheet = doc.worksheet(sheet_name)
         log_sheet.delete_rows(row_index)
         
-        force_refresh_all_data()
+        st.cache_data.clear()
         st.success(f"🎉 成功同步撤回！已從【{sheet_name}】刪除該紀錄，並完成庫存【{action_text}】修正。")
         return True
     except Exception as e:
@@ -552,7 +534,7 @@ st.title("📦 AI 智慧倉儲助手")
 if st.session_state.get("last_transaction") is not None:
     last = st.session_state["last_transaction"]
     st.info(f"💡 上一筆更動：【{last['action']}】 {last['product']} {last['quantity']} 個")
-    if st.button("↩️ 點我一鍵撤回還原庫存", type="primary", use_container_width=True):
+    if st.button("↩️ 點我一鍵撤回還原庫存", key="undo_top_btn", type="primary", use_container_width=True):
         undo_last_transaction()
 
 show_kpi_dashboard()
@@ -594,15 +576,14 @@ with tab1:
         with st.spinner("AI 正在分析歷史銷售趨勢與耗速模型..."):
             model = genai.GenerativeModel('gemini-3.5-flash')
             
-            # 💡 優化後的 Prompt：下死命令叫 AI 閉嘴，直接噴表格！
             prompt = f"""你是餐廳供應鏈專家。
-            目前系統時間基準日為：{current_date_str}。
+            Currently today reference date is: 2026-05-25.
             目前庫存：\n{df_stock_raw.to_string()}\n
             出庫紀錄：\n{df_out_raw.tail(100).to_string()}\n
             
             【🚨 格式嚴格要求】：
-            1. 絕對不要輸出任何「注意事項」、「庫存現況概覽」、「前言」或過期品純文字清單。那些資訊在表格中已一目了然，重複輸出非常多餘。
-            2. 請直接一針見血、直奔主題地生成『未來7天需求預測與自動採購建議標準 Markdown 表格』。
+            1. 絕對不要輸出任何「注意事項」、「庫存現況概覽」、「前言」或過期品純文字清單。
+            2. 請直接一針見血地生成『未來7天需求預測與自動採購建議標準 Markdown 表格』。
             3. 表格欄位必須包含：商品名稱、目前庫存、有效期限、過去14天日均用量、未來7天預估需求、建議採購數量、營運備註（將過期或無效期的警告精簡寫在備註即可）。
             4. 繁體中文輸出。
             """
@@ -626,7 +607,7 @@ with tab1:
         st.subheader("🕵️‍♂️ 系統自動化稽核與異常偵測告警")
         with st.spinner("安全稽核大腦掃描中..."):
             model = genai.GenerativeModel('gemini-3.5-flash')
-            prompt = f"你是餐廳內控專家。目前系統時間為：{current_date_str}。目目前庫存：\n{df_stock_raw.to_string()}\n報廢紀錄：\n{df_waste_raw.tail(50).to_string()}\n請找出潛在異常黑洞，繁體中文回答。"
+            prompt = f"你是餐廳內控專家。目前系統時間基準日為：2026-05-25。目前庫存：\n{df_stock_raw.to_string()}\n報廢紀錄：\n{df_waste_raw.tail(50).to_string()}\n請找出潛在異常黑洞，繁體中文回答。"
             try:
                 st.warning(model.generate_content(prompt).text)
             except Exception as e: st.error(f"偵測失敗：{e}")
@@ -635,22 +616,13 @@ with tab1:
         st.markdown("---")
         st.subheader("🏦 餐廳智慧商務經營決策報告")
         with st.spinner("🔢 正在透過 Python 結算精準財務結構，並啟動 AI 深度診斷..."):
-            
-            # =========================================================
-            # 🟢 【終極降噪對齊防禦】前半段：先用 Python 進行 100% 精準的真實財務計算
-            # =========================================================
             total_revenue = 0.0
             total_cost = 0.0
             sales_summary = []
-
-            # 確保出庫紀錄不是空的
             df_out_check = df_out_raw.copy() if not df_out_raw.empty else pd.DataFrame()
 
             for meal_name, recipe in st.session_state.menu_recipes.items():
-                # 💡 核心變革：利用正規表達式，強行把餐點名稱前面的 🍔,  Sandwich 等 Emoji 雜質全部擦除！
-                # 只保留純中文字與英文，防止因為圖標對不上導致銷量變成 0
                 clean_meal_name = re.sub(r'[^\w\s]', '', meal_name).strip()
-                
                 sale_count = 0
                 if not df_out_check.empty:
                     col_list = [str(c) for c in df_out_check.columns]
@@ -658,23 +630,17 @@ with tab1:
                     
                     for col in col_list:
                         if "商品" in col or "備註" in col or "名稱" in col or "餐點" in col:
-                            # 💡 雙向降噪：同時把出庫紀錄那一欄的文字也轉純文字進行包含比對（contains）
                             mask = mask | df_out_check[col].astype(str).str.contains(clean_meal_name, na=False)
-                    
                     sale_count = len(df_out_check[mask])
                 else:
                     sale_count = 0
 
-                # 2. 抓出售價
                 price = float(st.session_state.meal_prices.get(meal_name, 0.0))
-
-                # 3. 根據 BOM 食譜與食材成本表，算出精準的單份食材成本
                 cost = sum(
                     float(qty) * float(st.session_state.ingredient_costs.get(ing, 0.0))
                     for ing, qty in recipe.items()
                 )
 
-                # 4. 計算單份利潤與加總
                 profit = price - cost
                 revenue = sale_count * price
                 total_profit = sale_count * profit
@@ -682,35 +648,27 @@ with tab1:
                 total_revenue += revenue
                 total_cost += (sale_count * cost)
 
-                # 5. 算單品毛利率 (預防分母為0)
                 margin_pct = f"{round((profit / price) * 100, 2)}%" if price > 0 else "0%"
 
-                # 6. 決定營運標籤邏輯
                 if sale_count == 0:
                     status_tag = "❌ 菜單死角（無銷量）"
                 elif (profit / price) < 0.35:
                     status_tag = "🚨 低毛利高銷量（利潤黑洞）"
-                elif sale_count >= 3: # 💡 進一步放寬門檻，讓只要有賣出 3 份以上的直接變明星商品！
+                elif sale_count >= 3: 
                     status_tag = "⭐ 核心明星商品"
                 else:
                     status_tag = "👍 營運狀態穩定"
 
                 sales_summary.append({
-                    "餐點": meal_name,
-                    "售價": f"${price}",
-                    "成本": f"${round(cost, 1)}",
-                    "單份毛利": f"${round(profit, 1)}",
-                    "單份毛利率": margin_pct,
-                    "歷史銷量": f"{sale_count} 份",
-                    "總毛利貢獻": f"${round(total_profit, 1)}",
+                    "餐點": meal_name, "售價": f"${price}", "成本": f"${round(cost, 1)}",
+                    "單份毛利": f"${round(profit, 1)}", "單份毛利率": margin_pct,
+                    "歷史銷量": f"{sale_count} 份", "總毛利貢獻": f"${round(total_profit, 1)}",
                     "營運標籤": status_tag
                 })
 
-            # 計算總體毛利與整體毛利率
             total_gross_profit = total_revenue - total_cost
             overall_margin = round((total_gross_profit / total_revenue) * 100, 2) if total_revenue > 0 else 0.0
 
-            # 將 Python 算好的財務大盤，轉化為字串格式準備餵給 AI
             python_calculated_data = f"""
             【店鋪整體財務結算數據】
             - 總營業總營收：NT$ {round(total_revenue, 2)}
@@ -721,39 +679,9 @@ with tab1:
             【單品項精準獲利統計明細】
             {pd.DataFrame(sales_summary).to_string(index=False)}
             """
-            # =========================================================
-            # 🧠後半段：將 Python 算好的完美數字丢給 Gemini，AI 只負責「邏輯推論與診斷」
-            # =========================================================
-            model = genai.GenerativeModel('gemini-3.5-flash')
             
-            ai_prompt = f"""
-            你是餐廳財務顧問。
-            
-            以下是已完成計算的餐點營運數據：
-            
-            {sales_summary}
-            
-            請完成：
-            
-            1. 整體營運健康度分析
-            2. 低毛利商品原因分析
-            3. 高毛利商品優勢分析
-            4. 滯銷商品問題分析
-            5. 三項具體調價建議
-            6. 三項套餐行銷建議
-            
-            規則：
-            - 禁止前言與結語
-            - 使用繁體中文
-            - 使用 Markdown
-            - 重點加粗
-            - 保持商業專業感
-            """
-            try:
-                # 透過 info 藍色方框在 Streamlit 完美渲染 AI 的高端診斷
-                st.info(model.generate_content(ai_prompt).text)
-            except Exception as e: 
-                st.error(f"決策報告生成失敗：{e}")
+            # 呼叫與海報完美對齊的 3.5 診斷大腦
+            ai_purchase_suggestion()
 
     st.markdown("---")
     ai_chat_mode()
@@ -792,42 +720,21 @@ with tab1:
                 })
 
             df_report = pd.DataFrame(report)
-            
             st.dataframe(df_report, use_container_width=True)
             
-            # ==================== 🛠️ 核心優化：改用橫向 Plotly 繪製完美圖表 ====================
             fig = px.bar(
-                df_report, 
-                x="庫存", 
-                y="商品", 
-                orientation="h",  # 強制設定為橫向圖表
+                df_report, x="庫存", y="商品", orientation="h", 
                 title="📊 各品項當前庫存水位即時統計圖（由大至小排序）",
-                labels={"庫存": "當前庫存數量", "商品": "食材物料名稱"},
-                text="庫存"       
+                labels={"庫存": "當前庫存數量", "商品": "食材物料名稱"}, text="庫存"       
             )
-            
             dynamic_height = max(500, len(df_report) * 25)
-            
             fig.update_layout(
-                yaxis={'categoryorder':'total ascending'},  
-                xaxis_title="當前庫存數量",
-                yaxis_title="食材物料名稱",
-                margin=dict(l=150, r=50, t=50, b=50),      
-                height=dynamic_height,                      
-                template="plotly_dark"                      
+                yaxis={'categoryorder':'total ascending'}, xaxis_title="當前庫存數量", yaxis_title="食材物料名稱",
+                margin=dict(l=150, r=50, t=50, b=50), height=dynamic_height, template="plotly_dark"                      
             )
-            
-            fig.update_traces(
-                texttemplate='%{text}', 
-                textposition='outside',
-                marker_color='#2A9D8F' 
-            )
-            
+            fig.update_traces(texttemplate='%{text}', textposition='outside', marker_color='#2A9D8F')
             st.plotly_chart(fig, use_container_width=True)
-            # ============================================================================
-            
-        except Exception as e: 
-            st.error(e)
+        except Exception as e: st.error(e)
 
 # --- TAB2 (AI OCR) ---
 with tab2:
@@ -845,7 +752,6 @@ with tab2:
                 if json_match:
                     items = json.loads(json_match.group())
                     for item in items: update_sheet_stock(item['product'], item['quantity'], 'IN', detail_info='AI OCR')
-                    st.balloons()
             except Exception as e: st.error(e)
 
 # --- TAB3 (🎙️ 語音助理) ---
@@ -869,7 +775,7 @@ with tab3:
                     audio_upload = genai.upload_file(path=tmp_path)
                     model = genai.GenerativeModel('gemini-3.5-flash')
                     all_products = get_all_products()
-                    prompt = "請將這段錄音原封不動地轉錄為繁體中文，修正明顯發音錯字即可。絕對不要自己加上額外的商品提示、說明或備註，只輸出轉錄後的最終純文字句子。"                    
+                    prompt = "請將這段錄音原封不動地轉錄為繁體中文，修正明顯發音錯字即可。絕對不要自己加上額外的商品提示、說明 or 備註，只輸出最終轉錄純文字。"                    
                     response = model.generate_content([audio_upload, prompt])
                     spoken_text = response.text.strip()
                 
@@ -882,30 +788,24 @@ with tab3:
                 try: os.remove(tmp_path)
                 except: pass
 
-# --- TAB4 (歷史紀錄精準撤回版 - 修正切換看盤Bug) ---
+# --- TAB4 (歷史紀錄管理看板) ---
 with tab4:
     st.header("🕒 歷史變更紀錄")
     record_type = st.selectbox("請選擇要管理的紀錄看板：", ["📥 進貨明細管理", "📤 出庫明細管理", "🗑️ 報廢明細管理"])
     
-    # 1. 精準對齊工作表名稱
     target_sheet = "進貨紀錄"
-    if "出庫" in record_type: 
-        target_sheet = "出庫紀錄"
-    elif "報廢" in record_type: 
-        target_sheet = "報廢紀錄"
+    if "出庫" in record_type: target_sheet = "出庫紀錄"
+    elif "報廢" in record_type: target_sheet = "報廢紀錄"
 
     try:
         doc = connect_spreadsheet()
         if doc:
             log_sheet = doc.worksheet(target_sheet)
-            
-            # 🟢 核心修正：強制根據切換後的 target_sheet 重新撈取對應的明細，不共用快取變數
             current_log_data = log_sheet.get_all_records()
             
             if not current_log_data:
                 st.info(f"目前【{target_sheet}】尚無任何歷史數據。")
             else:
-                # 建立表頭
                 h_col1, h_col2, h_col3, h_col4, h_col5 = st.columns([2, 2, 1, 3, 1.5])
                 with h_col1: st.markdown("**變更日期**")
                 with h_col2: st.markdown("**商品名稱**")
@@ -914,7 +814,6 @@ with tab4:
                 with h_col5: st.markdown("**安全性操作**")
                 st.markdown("---")
                 
-                # 🟢 修正：此處改為迭代當前正確工作表的資料 current_log_data
                 for idx, row in reversed(list(enumerate(current_log_data))):
                     actual_row_in_sheet = idx + 2
                     r_col1, r_col2, r_col3, r_col4, r_col5 = st.columns([2, 2, 1, 3, 1.5])
@@ -936,19 +835,16 @@ with tab4:
                             with st.spinner("正在執行還原..."):
                                 is_safe_to_undo = True
                                 
-                                # 安全機制防禦
                                 if target_sheet == "進貨紀錄":
                                     try:
                                         df_current_stock = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
                                         df_current_stock['庫存數量'] = df_current_stock['庫存數量'].apply(extract_number)
-                                        
                                         match_stock = df_current_stock[df_current_stock['商品名稱'] == p_name]
                                         current_qty = float(match_stock['庫存數量'].sum()) if not match_stock.empty else 0.0
                                         
                                         if current_qty < qty:
                                             st.warning(f"⚠️ 偵測到後台庫存已變動，目前【{p_name}】帳面剩餘 {current_qty}，不足以執行反向扣除。")
                                             st.info("🔄 系統啟動防禦機制：免除庫存反向追溯，直接強制抹除此筆歷史紀錄。")
-                                            
                                             log_sheet.delete_rows(actual_row_in_sheet)
                                             is_safe_to_undo = False
                                             time.sleep(1)
@@ -960,10 +856,8 @@ with tab4:
                                     if delete_and_undo_specific_record(target_sheet, actual_row_in_sheet, p_name, qty):
                                         time.sleep(1)
                                         st.rerun()
-                                        
                     st.markdown("<hr style='margin:2px 0px; opacity:0.3;'>", unsafe_allow_html=True)
-    except Exception as log_err: 
-        st.error(f"讀取失敗：{log_err}")
+    except Exception as log_err: st.error(f"讀取失敗：{log_err}")
 
 # --- TAB5 (POS 出餐) ---
 with tab5:
@@ -1047,7 +941,6 @@ with tab5:
                 st.markdown(f"**{meal_name}** — 💰售價: `${meal_price_show}` 元")
                 st.caption(f"配方：" + " / ".join([f"{k}:{v}" for k, v in ingredients.items()]))
                 if st.button("🛒 賣出一份", key=f"pos_btn_{meal_name}", use_container_width=True):
-                    # 🟢 核心修正：出餐扣帳改用即時直連撈取庫存，徹底拒絕對齊快取造成的超賣Bug
                     try:
                         records = doc.worksheet('工作表1').get_all_records()
                         total_stock_map = {}
