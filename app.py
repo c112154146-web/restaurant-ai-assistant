@@ -851,24 +851,30 @@ with tab3:
                 try: os.remove(tmp_path)
                 except: pass
 
-# --- TAB4 (歷史紀錄精準撤回版) ---
+# --- TAB4 (歷史紀錄精準撤回版 - 修正切換看盤Bug) ---
 with tab4:
     st.header("🕒 歷史變更紀錄")
     record_type = st.selectbox("請選擇要管理的紀錄看板：", ["📥 進貨明細管理", "📤 出庫明細管理", "🗑️ 報廢明細管理"])
     
+    # 1. 精準對齊工作表名稱
     target_sheet = "進貨紀錄"
-    if "出庫" in record_type: target_sheet = "出庫紀錄"
-    elif "報廢" in record_type: target_sheet = "報廢紀錄"
+    if "出庫" in record_type: 
+        target_sheet = "出庫紀錄"
+    elif "報廢" in record_type: 
+        target_sheet = "報廢紀錄"
 
     try:
         doc = connect_spreadsheet()
         if doc:
             log_sheet = doc.worksheet(target_sheet)
-            raw_data = log_sheet.get_all_records()
             
-            if not raw_data:
+            # 🟢 核心修正：強制根據切換後的 target_sheet 重新撈取對應的明細，不共用快取變數
+            current_log_data = log_sheet.get_all_records()
+            
+            if not current_log_data:
                 st.info(f"目前【{target_sheet}】尚無任何歷史數據。")
             else:
+                # 建立表頭
                 h_col1, h_col2, h_col3, h_col4, h_col5 = st.columns([2, 2, 1, 3, 1.5])
                 with h_col1: st.markdown("**變更日期**")
                 with h_col2: st.markdown("**商品名稱**")
@@ -877,7 +883,8 @@ with tab4:
                 with h_col5: st.markdown("**安全性操作**")
                 st.markdown("---")
                 
-                for idx, row in reversed(list(enumerate(raw_data))):
+                # 🟢 修正：此處改為迭代當前正確工作表的資料 current_log_data
+                for idx, row in reversed(list(enumerate(current_log_data))):
                     actual_row_in_sheet = idx + 2
                     r_col1, r_col2, r_col3, r_col4, r_col5 = st.columns([2, 2, 1, 3, 1.5])
                     
@@ -898,6 +905,7 @@ with tab4:
                             with st.spinner("正在執行還原..."):
                                 is_safe_to_undo = True
                                 
+                                # 安全機制防禦
                                 if target_sheet == "進貨紀錄":
                                     try:
                                         df_current_stock = pd.DataFrame(doc.worksheet('工作表1').get_all_records())
@@ -907,7 +915,7 @@ with tab4:
                                         current_qty = float(match_stock['庫存數量'].sum()) if not match_stock.empty else 0.0
                                         
                                         if current_qty < qty:
-                                            st.warning(f"⚠️ 偵測到後台庫存已變動或被手動移除，目前【{p_name}】帳面剩餘 {current_qty}，不足以執行反向扣除。")
+                                            st.warning(f"⚠️ 偵測到後台庫存已變動，目前【{p_name}】帳面剩餘 {current_qty}，不足以執行反向扣除。")
                                             st.info("🔄 系統啟動防禦機制：免除庫存反向追溯，直接強制抹除此筆歷史紀錄。")
                                             
                                             log_sheet.delete_rows(actual_row_in_sheet)
@@ -915,7 +923,7 @@ with tab4:
                                             time.sleep(1)
                                             st.rerun()
                                     except Exception as check_err:
-                                        st.error(f"安全性檢查失敗，維持原程序執行: {check_err}")
+                                        st.error(f"安全性檢查失敗: {check_err}")
 
                                 if is_safe_to_undo:
                                     if delete_and_undo_specific_record(target_sheet, actual_row_in_sheet, p_name, qty):
@@ -923,7 +931,8 @@ with tab4:
                                         st.rerun()
                                         
                     st.markdown("<hr style='margin:2px 0px; opacity:0.3;'>", unsafe_allow_html=True)
-    except Exception as log_err: st.error(f"讀取失敗：{log_err}")
+    except Exception as log_err: 
+        st.error(f"讀取失敗：{log_err}")
 
 # --- TAB5 (POS 出餐) ---
 with tab5:
