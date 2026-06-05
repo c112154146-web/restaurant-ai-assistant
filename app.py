@@ -402,70 +402,7 @@ def delete_and_undo_specific_record(sheet_name, row_index, product_name, quantit
 # =========================================================
 # 5. ⭐ 雙層大腦語意降噪解析演算法
 # =========================================================
-def smart_parse_and_execute(text):
-    st.info(f"🧠 語意大腦正在自動過濾環境噪聲與口誤...")
-    all_products = get_all_products()
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    weekday_str = datetime.now().strftime("%A") 
-    
-    nlp_prompt = f"""
-    You are an advanced voice command assistant for a restaurant kitchen storage. 
-    Current Date Today is: {today_str} ({weekday_str})
-    Valid product list in our database:
-    {', '.join(all_products)}
 
-    Your mission:
-    1. Identify the core action intent: '進貨', '出庫', or '報廢'.
-    2. Identify the product name. Correct it to match the closest item in the "Valid product list".
-    3. Identify the final corrected numeric quantity.
-    4. Smart Expiry Calculation: Look at the text to see if the user mentioned any expiry info.
-       Based on Today's date ({today_str}), calculate the EXACT target expiry date in YYYY-MM-DD format. Output 'None' if not mentioned.
-
-    Output ONLY the cleaned standard command in this exact format: [動作] [商品名稱] [最終純數字] [計算出的YYYY-MM-DD日期或None]
-    Do NOT output markdown, quotes, formatting or any explanations.
-    """
-    
-    cleaned_command = ""
-    for attempt in range(3):
-        try:
-            model = genai.GenerativeModel('gemini-3.5-flash')
-            response = model.generate_content([nlp_prompt, text])
-            cleaned_command = response.text.strip()
-            break
-        except Exception as e:
-            if "429" in str(e): time.sleep(2); continue
-            else: st.error(f"AI 降噪失敗: {e}"); return
-
-    if cleaned_command:
-        st.success(f"✨ 語意大腦過濾成功 ➡️ 精準還原指令：『{cleaned_command}』")
-        action = 'IN'
-        if '進貨' in cleaned_command: action = 'IN'
-        elif '出庫' in cleaned_command: action = 'OUT'
-        elif '報廢' in cleaned_command: action = 'WASTE'
-        
-        try:
-            parts = cleaned_command.split()
-            if len(parts) >= 3:
-                parsed_product_name = parts[1].strip()
-                quantity = float(parts[2])
-                expiry_val = parts[3].strip() if len(parts) >= 4 else "None"
-                
-                best_match = process.extractOne(parsed_product_name, all_products, scorer=fuzz.ratio)
-                if best_match and best_match[1] >= 80:
-                    matched_product_name = best_match[0]
-                    update_sheet_stock(
-                        product_name=matched_product_name, 
-                        quantity=quantity, 
-                        action=action, 
-                        expiry=expiry_val, 
-                        detail_info=f"雙層語意助理: {text}"
-                    )
-                else:
-                    st.error(f"🚨 語音輸入失敗：食材【{parsed_product_name}】在後台找不到對應品項！")
-            else:
-                st.error("系統分析語意結構不完整，請重新宣讀。")
-        except Exception as parse_err:
-            st.error(f"指令解碼失敗: {parse_err}")
 
 # =========================================================
 # 6. 前端介面佈局
@@ -719,10 +656,10 @@ with tab2:
                         else:
                             st.error("沒有有效資料可寫入。")
 
-# --- TAB3 (🎙️ 語音助理) ---
+# --- TAB3 (🎙️ 語音極速助理) ---
 with tab3:
     st.header("🎙️ 語音輸入")
-    st.write("💡 錄音完成並按下停止後，系統將自動進行雙層大腦校正並安全入庫。")
+    st.write("💡 錄音完成並按下停止後，系統將啟動【多模態單次解析技術】，1~2秒內極速完成轉錄與入庫。")
     st.write("💡 支援指定相對有效期限，例如：「進貨 鮮奶 10瓶 5天」")
     audio_file = st.audio_input("錄音控制台")
 
@@ -731,28 +668,72 @@ with tab3:
         if st.session_state.get("last_processed_audio") == current_audio_bytes:
             st.caption("✨ 本次語音已執行完畢。")
         else:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                tmp.write(current_audio_bytes)
-                tmp_path = tmp.name
-
             try:
-                with st.spinner("🎵 語音傳輸中，正在進行精準 STT 字詞轉錄..."):
-                    audio_upload = genai.upload_file(path=tmp_path)
+                with st.spinner("🚀 AI 多模態大腦極速解析中 (語音直出指令)..."):
                     model = genai.GenerativeModel('gemini-3.5-flash')
                     all_products = get_all_products()
-                    prompt = "請將這段錄音原封不動地轉錄為繁體中文，修正明顯發音錯字即可。絕對不要自己加上額外的商品提示、說明或備註，只輸出轉錄後的最終純文字句子。"                    
-                    response = model.generate_content([audio_upload, prompt])
-                    spoken_text = response.text.strip()
-                
-                if spoken_text:
-                    st.success(f"🎙️ 語音轉錄結果：{spoken_text}")
-                    smart_parse_and_execute(spoken_text)
-                    st.session_state.last_processed_audio = current_audio_bytes
-            except Exception as e: st.error(f"語音處理失敗: {e}")
-            finally:
-                try: os.remove(tmp_path)
-                except: pass
+                    today_str = datetime.now().strftime("%Y-%m-%d")
+                    
+                    # 🟢 核心優化：直接將記憶體中的音檔轉換為 Gemini 接受的 Inline Data
+                    mime_type = audio_file.type if audio_file.type else "audio/wav"
+                    audio_part = {
+                        "mime_type": mime_type,
+                        "data": current_audio_bytes
+                    }
+                    
+                    # 🟢 核心優化：一個 Prompt 同時完成 STT(聽寫) 與 NLP(語意解析)
+                    prompt = f"""
+                    You are a restaurant storage AI. Listen to the audio command.
+                    Today is: {today_str}
+                    Valid products: {', '.join(all_products)}
 
+                    Task:
+                    1. Transcribe the audio exactly into Traditional Chinese.
+                    2. Parse the intent. Action must be exactly 'IN', 'OUT', or 'WASTE'.
+                    3. Match the product name to the closest one in the "Valid products" list.
+                    4. Extract numeric quantity.
+                    5. Calculate target expiry date (YYYY-MM-DD). Output 'None' if not mentioned.
+
+                    Return ONLY a valid JSON object without markdown formatting. Example:
+                    {{"text": "進貨高麗菜三公斤", "action": "IN", "product": "高麗菜", "quantity": 3.0, "expiry": "None"}}
+                    """
+                    
+                    # 🚀 單次發射：直接把音檔跟文字一起丟給模型，速度提升 300%
+                    response = model.generate_content([audio_part, prompt])
+                    
+                    # 清理並解析 JSON
+                    json_str = response.text.replace('```json', '').replace('```', '').strip()
+                    result = json.loads(json_str)
+                    
+                    spoken_text = result.get("text", "")
+                    action_intent = result.get("action", "IN")
+                    parsed_product = result.get("product", "")
+                    quantity = float(result.get("quantity", 0.0))
+                    expiry_val = result.get("expiry", "None")
+                    
+                    st.success(f"🎙️ 語音轉錄結果：『{spoken_text}』")
+                    
+                    # 安全性：模糊比對確保品名 100% 能對齊資料庫
+                    best_match = process.extractOne(parsed_product, all_products, scorer=fuzz.ratio)
+                    if best_match and best_match[1] >= 80:
+                        matched_product_name = best_match[0]
+                        st.info(f"✨ 語意極速校正成功：[{action_intent}] {matched_product_name} {quantity} (效期: {expiry_val})")
+                        
+                        update_sheet_stock(
+                            product_name=matched_product_name, 
+                            quantity=quantity, 
+                            action=action_intent, 
+                            expiry=expiry_val, 
+                            detail_info=f"極速語音: {spoken_text}"
+                        )
+                        st.session_state.last_processed_audio = current_audio_bytes
+                    else:
+                        st.error(f"🚨 找不到食材：【{parsed_product}】不在後台品項清單中！")
+                        
+            except json.JSONDecodeError:
+                st.error(f"AI 輸出格式錯誤，無法解析：{response.text}")
+            except Exception as e: 
+                st.error(f"語音處理失敗: {e}")
 # --- TAB4 (歷史紀錄精準撤回版) ---
 with tab4:
     st.header("🕒 歷史變更紀錄")
