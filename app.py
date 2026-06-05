@@ -282,7 +282,7 @@ def process_fifo_outbound(product_name, out_qty, sheet, headers, records):
 
     return True, "成功", updates
 
-def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info="一般", is_undo=False):
+def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info="一般", is_undo=False, no_rerun=False):
     try:
         doc = connect_spreadsheet()
         if not doc: return
@@ -338,7 +338,11 @@ def update_sheet_stock(product_name, quantity, action, expiry=None, detail_info=
                     st.session_state.last_transaction = {"action": "WASTE", "product": product_name, "quantity": quantity}
         
         st.cache_data.clear()
-        st.rerun()
+        
+        # 🟢 2. 結尾處加上判斷，如果開啟安靜模式，就不執行 rerun 閃退
+        if not no_rerun:
+            st.rerun()
+            
     except Exception as e: st.error(f"系統更新失敗：{e}")
 
 def undo_last_transaction():
@@ -674,14 +678,12 @@ with tab3:
                     all_products = get_all_products()
                     today_str = datetime.now().strftime("%Y-%m-%d")
                     
-                    # 🟢 核心優化：直接將記憶體中的音檔轉換為 Gemini 接受的 Inline Data
                     mime_type = audio_file.type if audio_file.type else "audio/wav"
                     audio_part = {
                         "mime_type": mime_type,
                         "data": current_audio_bytes
                     }
                     
-                    # 🟢 核心優化：一個 Prompt 同時完成 STT(聽寫) 與 NLP(語意解析)
                     prompt = f"""
                     You are a restaurant storage AI. Listen to the audio command.
                     Today is: {today_str}
@@ -698,10 +700,8 @@ with tab3:
                     {{"text": "進貨高麗菜三公斤", "action": "IN", "product": "高麗菜", "quantity": 3.0, "expiry": "None"}}
                     """
                     
-                    # 🚀 單次發射：直接把音檔跟文字一起丟給模型，速度提升 300%
                     response = model.generate_content([audio_part, prompt])
                     
-                    # 清理並解析 JSON
                     json_str = response.text.replace('```json', '').replace('```', '').strip()
                     result = json.loads(json_str)
                     
@@ -713,7 +713,6 @@ with tab3:
                     
                     st.success(f"🎙️ 語音轉錄結果：『{spoken_text}』")
                     
-                    # 安全性：模糊比對確保品名 100% 能對齊資料庫
                     best_match = process.extractOne(parsed_product, all_products, scorer=fuzz.ratio)
                     if best_match and best_match[1] >= 80:
                         matched_product_name = best_match[0]
@@ -724,7 +723,8 @@ with tab3:
                             quantity=quantity, 
                             action=action_intent, 
                             expiry=expiry_val, 
-                            detail_info=f"極速語音: {spoken_text}"
+                            detail_info=f"極速語音: {spoken_text}",
+                            no_rerun=True  # 🟢 加上這行！它會安靜寫入資料庫，不再逼迫網頁跳轉回首頁
                         )
                         st.session_state.last_processed_audio = current_audio_bytes
                     else:
